@@ -2,8 +2,8 @@
 
 This is an evaluation command, not a second agent runtime.  It runs the
 versioned, offline scenarios against the production helpers with controlled
-temporary environments.  ``--live`` adds a read-only local smoke of the
-installed Hook and Doctor; it never writes GitHub state.
+temporary environments. ``--live`` adds a non-remote local smoke of the
+installed Hook plus the checkout Doctor; it never writes GitHub state.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ except ModuleNotFoundError:  # Support the documented direct script entrypoint.
 ensure_supported_python(__file__)
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -27,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SUPPORTED_SUITE_VERSION = 1
 REQUIRED_FIELDS = frozenset({"id", "dimension", "prompt", "expected", "test"})
 UNOBSERVED_METRICS = (
     "fresh-context Codex prompt-following pass@k",
@@ -46,12 +48,27 @@ class Scenario:
     test: str
 
 
-def load_scenarios(path: Path) -> list[Scenario]:
+@dataclass(frozen=True)
+class ScenarioSuite:
+    """A versioned suite with enough provenance to identify its source."""
+
+    version: int
+    path: Path
+    content_sha256: str
+    scenarios: list[Scenario]
+
+
+def load_scenarios(path: Path) -> ScenarioSuite:
     """Load and validate the small, complete scenario denominator."""
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        resolved = path.resolve(strict=True)
+        content = resolved.read_bytes()
+        data = tomllib.loads(content.decode("utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"scenario suite is unavailable: {error}") from error
+    version = data.get("version")
+    if version != SUPPORTED_SUITE_VERSION:
+        raise ValueError(f"unsupported scenario suite version: {version!r}")
     entries = data.get("scenario")
     declared_count = data.get("count")
     if not isinstance(entries, list) or not isinstance(declared_count, int):
@@ -76,7 +93,12 @@ def load_scenarios(path: Path) -> list[Scenario]:
     identifiers = [scenario.identifier for scenario in scenarios]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError("scenario identifiers must be unique")
-    return scenarios
+    return ScenarioSuite(
+        version=version,
+        path=resolved,
+        content_sha256=hashlib.sha256(content).hexdigest(),
+        scenarios=scenarios,
+    )
 
 
 def _source_revision() -> dict[str, object]:
@@ -97,6 +119,18 @@ def _source_revision() -> dict[str, object]:
         "head": completed.stdout.strip() if completed.returncode == 0 else "unavailable",
         "worktree_clean": status.returncode == 0 and not status.stdout.strip(),
     }
+
+
+def _test_problems(result: unittest.TestResult) -> tuple[str, str | None]:
+    """Classify every unittest terminal state without treating skips as passes."""
+    if result.skipped:
+        return "UNOBSERVED", result.skipped[0][1]
+    if result.expectedFailures:
+        return "FAIL", result.expectedFailures[0][1]
+    if result.unexpectedSuccesses:
+        return "FAIL", "test unexpectedly succeeded"
+    problems = [detail for _test, detail in [*result.failures, *result.errors]]
+    return ("FAIL", problems[0]) if problems else ("PASS", None)
 
 
 def run_offline(scenarios: list[Scenario]) -> list[dict[str, object]]:
@@ -122,18 +156,24 @@ def run_offline(scenarios: list[Scenario]) -> list[dict[str, object]]:
         started = time.perf_counter()
         suite.run(result)
         elapsed_ms = round((time.perf_counter() - started) * 1_000, 1)
-        problems = [detail for _test, detail in [*result.failures, *result.errors]]
+        status, detail = _test_problems(result)
         results.append(
             {
                 "id": scenario.identifier,
                 "dimension": scenario.dimension,
-                "status": "PASS" if result.wasSuccessful() else "FAIL",
+                "status": status,
                 "evidence": scenario.test,
                 "duration_ms": elapsed_ms,
-                **({"detail": problems[0]} if problems else {}),
+                **({"detail": detail} if detail else {}),
             }
         )
     return results
+
+
+def _file_identity(path: Path) -> dict[str, str]:
+    """Identify a separately installed artifact used by a live evaluation."""
+    content = path.read_bytes()
+    return {"path": str(path.resolve()), "sha256": hashlib.sha256(content).hexdigest()}
 
 
 def run_live(codex_home: Path, local_config: Path) -> dict[str, object]:
@@ -141,13 +181,18 @@ def run_live(codex_home: Path, local_config: Path) -> dict[str, object]:
     from scripts.doctor import doctor
 
     installed_hook = codex_home / "harness/v23/task_bootstrap.py"
-    hook = subprocess.run(
-        (sys.executable, str(installed_hook), "--local-config", str(local_config)),
-        input=json.dumps({"cwd": str(ROOT), "prompt": "V23 live evaluation."}),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        hook_identity = _file_identity(installed_hook)
+        hook = subprocess.run(
+            (sys.executable, str(installed_hook), "--local-config", str(local_config)),
+            input=json.dumps({"cwd": str(ROOT), "prompt": "V23 live evaluation."}),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        hook_identity = {"path": str(installed_hook), "sha256": "unavailable"}
+        hook = subprocess.CompletedProcess((), 1, "", str(error))
     try:
         hook_payload = json.loads(hook.stdout)
         context = hook_payload["hookSpecificOutput"]["additionalContext"]
@@ -160,6 +205,8 @@ def run_live(codex_home: Path, local_config: Path) -> dict[str, object]:
         "status": "PASS" if hook.returncode == 0 and ready and doctor_report["ok"] else "FAIL",
         "hook_context": context,
         "doctor_ok": doctor_report["ok"],
+        "installed_hook": hook_identity,
+        "doctor_source": str(ROOT / "scripts/doctor.py"),
     }
 
 
@@ -175,18 +222,30 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        scenarios = load_scenarios(args.suite)
+        suite = load_scenarios(args.suite)
     except (TypeError, ValueError) as error:
         print(json.dumps({"ok": False, "error": str(error)}))
         return 2
-    results = run_offline(scenarios)
+    results = run_offline(suite.scenarios)
     passed = sum(result["status"] == "PASS" for result in results)
-    failed = len(results) - passed
+    failed = sum(result["status"] == "FAIL" for result in results)
+    unobserved = len(results) - passed - failed
     report: dict[str, object] = {
-        "ok": failed == 0,
+        "ok": failed == 0 and unobserved == 0,
         "source_revision": _source_revision(),
-        "offline": {"total": len(results), "passed": passed, "failed": failed, "results": results},
-        "unobserved": {"total": len(UNOBSERVED_METRICS), "claims": list(UNOBSERVED_METRICS)},
+        "suite": {
+            "version": suite.version,
+            "path": str(suite.path),
+            "content_sha256": suite.content_sha256,
+        },
+        "offline": {
+            "total": len(results),
+            "passed": passed,
+            "failed": failed,
+            "unobserved": unobserved,
+            "results": results,
+        },
+        "unobserved_claims": {"total": len(UNOBSERVED_METRICS), "claims": list(UNOBSERVED_METRICS)},
     }
     if args.live:
         live = run_live(args.codex_home, args.local_config)

@@ -13,11 +13,13 @@ python scripts/evaluate.py
 ```
 
 The JSON report always includes the complete denominator (`total`, `passed`,
-`failed`, and every scenario), the current Git HEAD, whether the worktree was
-clean, and a counted list of unobserved claims. A green offline result means
-that the tested Harness mechanics worked; it does not mean that an LLM followed
-prompts reliably, that token cost was acceptable, or that GitHub delivery
-succeeded remotely.
+`failed`, `unobserved`, and every scenario), the current Git HEAD, whether the
+worktree was clean, and the suite's supported version, resolved path, and
+content digest. The digest is evidence for an explicitly supplied external
+suite: a repository HEAD alone cannot identify that file. A green offline
+result means that the tested Harness mechanics worked; it does not mean that an
+LLM followed prompts reliably, that token cost was acceptable, or that GitHub
+delivery succeeded remotely.
 
 Use the optional local smoke only on a configured V23 machine:
 
@@ -25,9 +27,10 @@ Use the optional local smoke only on a configured V23 machine:
 python scripts/evaluate.py --live
 ```
 
-`--live` executes the installed UserPromptSubmit Hook and Doctor against the
-local project, checks the real CodeGraph/Semble/RTK results, and performs no
-GitHub write. It may create only the V23-owned Git-local CodeGraph cache.
+`--live` executes the installed UserPromptSubmit Hook plus the checkout Doctor
+against the local project, checks the real CodeGraph/Semble/RTK results, and
+performs no GitHub write. It identifies the installed Hook separately from the
+checkout source. It may create only the V23-owned Git-local CodeGraph cache.
 
 For a model or Harness comparison, create a disposable repository, freeze the
 prompt, initial revision, tool availability, model/profile, and task budget;
