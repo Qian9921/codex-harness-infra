@@ -73,6 +73,8 @@ def load_scenarios(path: Path) -> ScenarioSuite:
     declared_count = data.get("count")
     if not isinstance(entries, list) or not isinstance(declared_count, int):
         raise TypeError("scenario suite requires integer count and [[scenario]] entries")
+    if declared_count < 1:
+        raise ValueError("scenario suite count must be positive")
     if len(entries) != declared_count:
         raise ValueError(
             f"scenario count mismatch: declared {declared_count}, found {len(entries)}"

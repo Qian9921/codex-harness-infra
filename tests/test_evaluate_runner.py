@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 
-from scripts.evaluate import Scenario, load_scenarios, run_offline
+from scripts.evaluate import Scenario, load_scenarios, main, run_offline
 
 
 def run_generated_case(name: str, method: object) -> dict[str, object]:
@@ -52,6 +54,15 @@ class EvaluatorRunnerTests(unittest.TestCase):
             suite.write_text("version = 2\ncount = 0\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unsupported"):
                 load_scenarios(suite)
+
+    def test_empty_suite_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            suite = Path(directory) / "suite.toml"
+            suite.write_text("version = 1\ncount = 0\nscenario = []\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "positive"):
+                load_scenarios(suite)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(("--suite", str(suite))), 2)
 
 
 if __name__ == "__main__":
