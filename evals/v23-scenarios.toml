@@ -1,0 +1,114 @@
+version = 1
+count = 16
+
+[[scenario]]
+id = "discuss-read-only"
+dimension = "policy"
+prompt = "Explain the delivery workflow without changing anything."
+expected = "Discussion permits no branch, commit, pull request, or external comment."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_discuss_is_read_only"
+
+[[scenario]]
+id = "normal-change-default-delivery"
+dimension = "policy"
+prompt = "Fix a normal repository defect."
+expected = "A normal repository change defaults to the GitHub delivery path."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_normal_change_defaults_to_delivery"
+
+[[scenario]]
+id = "local-only-opt-out"
+dimension = "policy"
+prompt = "Make this change locally only."
+expected = "Local-only work is an explicit opt-out, not the default."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_local_only_is_an_explicit_opt_out"
+
+[[scenario]]
+id = "consequential-action-boundary"
+dimension = "policy"
+prompt = "Delete a remote release."
+expected = "Consequential external actions require separate confirmation."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_consequential_actions_stay_separate"
+
+[[scenario]]
+id = "three-tools-real-operation"
+dimension = "tools"
+prompt = "Inspect the delivery adapter."
+expected = "CodeGraph, Semble, and RTK each perform a bounded operation."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_bootstrap_operates_all_three_tools"
+
+[[scenario]]
+id = "missing-tool-does-not-skip"
+dimension = "tools"
+prompt = "Check tooling."
+expected = "A missing tool is reported while the remaining configured tools still run."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_missing_tool_does_not_skip_remaining_tools"
+
+[[scenario]]
+id = "tool-timeout-isolated"
+dimension = "tools"
+prompt = "Check bounded tool timeouts."
+expected = "A CodeGraph timeout does not skip Semble or RTK."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_codegraph_timeout_does_not_skip_other_tools"
+
+[[scenario]]
+id = "semble-owned-scope"
+dimension = "tools"
+prompt = "Search the source."
+expected = "Mandatory Semble health use is bounded to V23-owned source."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_semble_health_search_uses_owned_scope"
+
+[[scenario]]
+id = "split-github-identities"
+dimension = "delivery"
+prompt = "Deliver a repository change."
+expected = "Author and reviewer identities must be distinct and match configuration."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_distinct_github_identities_pass_preflight"
+
+[[scenario]]
+id = "same-github-identity-blocked"
+dimension = "delivery"
+prompt = "Deliver with one GitHub identity."
+expected = "Same-account delivery is rejected before external work."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_same_github_identity_is_rejected"
+
+[[scenario]]
+id = "stale-review-blocked"
+dimension = "delivery"
+prompt = "Approve an earlier pull request head."
+expected = "A review cannot be published when the current head differs."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_stale_review_is_rejected"
+
+[[scenario]]
+id = "old-approval-blocked"
+dimension = "delivery"
+prompt = "Merge after an old approval."
+expected = "An approval for a previous head cannot authorize merge."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_old_approval_blocks_merge"
+
+[[scenario]]
+id = "failed-ci-blocked"
+dimension = "delivery"
+prompt = "Merge while a required check fails."
+expected = "A failed required check blocks merge."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_failed_ci_blocks_merge"
+
+[[scenario]]
+id = "unresolved-thread-blocked"
+dimension = "delivery"
+prompt = "Merge with an unresolved review thread."
+expected = "An unresolved review thread blocks merge."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_unresolved_thread_blocks_merge"
+
+[[scenario]]
+id = "head-race-blocked"
+dimension = "delivery"
+prompt = "Merge while the pull request head changes."
+expected = "A changed pull request head blocks merge."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_head_change_blocks_merge"
+
+[[scenario]]
+id = "local-state-preserved"
+dimension = "installation"
+prompt = "Install and remove V23 beside personal Codex configuration."
+expected = "Install and uninstall preserve personal content, use one prompt hook, and add no Stop hook."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_install_uninstall_preserves_local_state"

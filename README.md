@@ -54,6 +54,7 @@ Copy `package/local.example.toml` to a local-only path, fill its model, opening,
 - [Workflow](WORKFLOW.md)
 - [GitHub delivery](docs/github-flow.md)
 - [Tool routing](docs/tool-routing.md)
+- [Evaluation](docs/evaluation.md)
 - [Engineering standards](docs/engineering-standards.md)
 - [Installation boundary](docs/installation-boundary.md)
 
