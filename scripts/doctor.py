@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tomllib
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -131,6 +132,20 @@ def _profile_check(path: Path, primary: str, effort: str, reviewer: str) -> tupl
 ToolProbe = Callable[[Path, str, dict[str, object]], list[ToolResult]]
 
 
+def _bridge_help(bridge: Path) -> tuple[bool, str]:
+    if not bridge.is_file() or bridge.is_symlink():
+        return False, f"missing or unsafe: {bridge}"
+    completed = subprocess.run(
+        [sys.executable, str(bridge), "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return False, completed.stderr.strip() or f"{bridge} --help failed"
+    return True, str(bridge)
+
+
 def _prompt_hook_check(runtime_config: dict, codex_home: Path) -> tuple[bool, str]:
     """Confirm the one V23 prompt hook points at its installed owned script."""
     hooks = runtime_config.get("hooks", {})
@@ -183,6 +198,18 @@ def doctor(
     checks.append(
         _result(
             "engineering_delivery_skill", skill.is_file() and not skill.is_symlink(), str(skill)
+        )
+    )
+    grok_skill = codex_home / "skills/grok-execution/SKILL.md"
+    grok_bridge = codex_home / "bin/grok-execution.py"
+    source_bridge = Path(__file__).resolve().parent / "grok_execution.py"
+    installed_ok, installed_detail = _bridge_help(grok_bridge)
+    source_ok, source_detail = _bridge_help(source_bridge)
+    checks.append(
+        _result(
+            "grok_execution_route",
+            grok_skill.is_file() and not grok_skill.is_symlink() and installed_ok and source_ok,
+            f"{grok_skill}; {installed_detail}; {source_detail}",
         )
     )
     try:

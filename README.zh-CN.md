@@ -22,10 +22,10 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 可移植角色为 `primary`、`executor` 和 `reviewer`：
 
 - `primary` 负责需求、范围、决策和最终沟通。
-- `executor` 负责边界清晰的实现与相关验证。
+- 外部 Grok bridge 以 low effort 负责边界清晰的实现与相关验证；native `executor` 只有在收到可验证的 Grok 额度耗尽 receipt 后才能作为 fallback 使用。
 - `reviewer` 使用新上下文，以只读方式审查当前变更。
 
-本机安装会把逻辑角色映射到该机器可用的模型和工具。模型名称、账号映射、凭据、开场指令和绝对路径属于本机配置，不提交到仓库。
+本机安装会把 primary、fallback executor 和 reviewer 映射到该机器可用的 native 模型和工具。Native 模型 slug、账号映射、凭据、开场指令和绝对路径仍属于本机配置；外部 Grok 执行身份是 portable 产品 contract。
 
 ## 交付
 

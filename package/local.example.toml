@@ -12,6 +12,7 @@ python = ""
 primary = ""
 primary_effort = "medium"
 executor = ""
+# Native quota-exhaustion-only fallback; normal execution uses Grok Build low.
 executor_effort = "medium"
 reviewer = ""
 
