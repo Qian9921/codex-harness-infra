@@ -43,9 +43,37 @@ class RepositoryContractTests(unittest.TestCase):
 
     def test_portable_identity_excludes_local_machine_content(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        installed = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
         self.assertIn("Principal Engineer / Research Scientist", agents)
+        self.assertIn("不靠仪式感制造正确", agents)
+        self.assertIn("不靠仪式感制造正确", installed)
         self.assertNotRegex(agents, re.compile(r"/(?:Users|home)/"))
         self.assertNotRegex(agents, re.compile(r"(?i)(?:api[_-]?key|access[_-]?token|secret)\s*="))
+
+    def test_portable_surface_excludes_local_opening(self) -> None:
+        local_opening = "\u4f1f\u5927\u7684\u4eae\u4eae"
+        roots = (
+            ROOT / "AGENTS.md",
+            ROOT / "README.md",
+            ROOT / "README.zh-CN.md",
+            ROOT / "WORKFLOW.md",
+            ROOT / "package",
+            ROOT / ".agents",
+            ROOT / "scripts",
+            ROOT / "docs",
+            ROOT / "evals",
+            ROOT / "tests",
+        )
+        violations = [
+            str(path.relative_to(ROOT))
+            for root in roots
+            for path in ([root] if root.is_file() else root.rglob("*"))
+            if path.is_file()
+            and path.suffix != ".pyc"
+            and "__pycache__" not in path.parts
+            and local_opening in path.read_text(encoding="utf-8")
+        ]
+        self.assertEqual(violations, [], f"local opening leaked into portable files: {violations}")
 
     def test_retired_directory_shapes_are_absent(self) -> None:
         """Use generic shapes so the test does not preserve old release names."""
