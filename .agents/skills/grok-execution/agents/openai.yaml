@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grok Execution"
+  short_description: "Run Grok 4.6 Build at low effort with quota-only fallback"
+  default_prompt: "Use $grok-execution for this execution task and verify the receipt and result."

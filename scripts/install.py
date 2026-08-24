@@ -302,13 +302,17 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     executor_template = repo_root / "package/agents/v23-executor.toml.in"
     reviewer_template = repo_root / "package/agents/v23-reviewer.toml.in"
     skill_source = repo_root / ".agents/skills/engineering-delivery"
+    grok_skill_source = repo_root / ".agents/skills/grok-execution"
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
+    grok_bridge_source = repo_root / "scripts/grok_execution.py"
     for source in (
         primary_template,
         executor_template,
         reviewer_template,
         skill_source,
+        grok_skill_source,
         bootstrap_source,
+        grok_bridge_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
@@ -363,8 +367,18 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             "directory",
         ),
         Asset(
+            ensure_within(codex_home, codex_home / "skills/grok-execution"),
+            grok_skill_source,
+            "directory",
+        ),
+        Asset(
             ensure_within(codex_home, codex_home / "harness/v23/task_bootstrap.py"),
             bootstrap_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/grok-execution.py"),
+            grok_bridge_source,
             "file",
         ),
     ]
@@ -377,7 +391,7 @@ def _config_block(runtime_python: Path, bootstrap_path: Path, local_config: Path
         for part in (runtime_python, bootstrap_path, "--local-config", local_config)
     )
     return f"""[agents.\"v23_executor\"]
-description = \"V23 scoped implementation executor.\"
+description = \"V23 quota-exhaustion-only native execution fallback.\"
 config_file = \"agents/v23-executor.toml\"
 
 [agents.\"v23_reviewer\"]

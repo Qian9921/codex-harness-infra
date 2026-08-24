@@ -18,6 +18,8 @@ REQUIRED_FILES = {
     "package/agents/v23-executor.toml.in",
     "package/agents/v23-reviewer.toml.in",
     ".agents/skills/engineering-delivery/SKILL.md",
+    ".agents/skills/grok-execution/SKILL.md",
+    "scripts/grok_execution.py",
     "scripts/install.py",
     "scripts/doctor.py",
     "scripts/github_delivery.py",
@@ -141,6 +143,10 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("相关性判断", installed_portable)
         self.assertIn("默认自动进入 GitHub 交付", installed_portable)
         self.assertIn("2–3 个互斥方案", installed_portable)
+        self.assertIn("$grok-execution", installed_portable)
+        self.assertIn("reasoning effort 固定为 `low`", installed_portable)
+        self.assertIn("QUOTA_EXHAUSTED", installed_portable)
+        self.assertIn("GROK_EXECUTION_BLOCKED", installed_portable)
         self.assertNotIn("[[hooks.Stop]]", installer)
         self.assertNotIn("/Users/", bootstrap)
         self.assertNotIn("/home/", bootstrap)

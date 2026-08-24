@@ -28,7 +28,7 @@ understand → implement → verify → commit → push → Pull Request
           → fresh independent review → fix if needed → approval → merge
 ```
 
-The primary role owns the request, scope, decisions, and final result. The executor performs bounded implementation and verification. The reviewer receives the request, current diff, relevant evidence, and current head SHA in fresh read-only context.
+The primary role owns the request, scope, decisions, and final result. The preferred external Grok execution route performs bounded implementation and verification at low effort. The native executor is a quota-exhaustion-only fallback. The reviewer receives the request, current diff, relevant evidence, and current head SHA in fresh read-only context.
 
 Ask before implementation only when a material ambiguity would change the result. Offer 2–3 mutually exclusive choices with tradeoffs and a recommendation; do not ask routine process questions.
 

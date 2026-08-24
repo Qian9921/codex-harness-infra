@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -44,10 +46,16 @@ class InstallerTests(unittest.TestCase):
             "Work identity: Principal Engineer / Research Scientist.\n", encoding="utf-8"
         )
         (repo / "scripts/task_bootstrap.py").write_text("print('bootstrap')\n", encoding="utf-8")
+        (repo / "scripts/grok_execution.py").write_text("print('grok bridge')\n", encoding="utf-8")
         skill = repo / ".agents/skills/engineering-delivery"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
             "---\nname: engineering-delivery\ndescription: Test.\n---\n", encoding="utf-8"
+        )
+        grok_skill = repo / ".agents/skills/grok-execution"
+        grok_skill.mkdir(parents=True)
+        (grok_skill / "SKILL.md").write_text(
+            "---\nname: grok-execution\ndescription: Test.\n---\n", encoding="utf-8"
         )
         local = root / "local.toml"
         local.write_text(
@@ -107,6 +115,8 @@ instruction = "Local-only opening."
             self.assertIn("user_setting = true", config_text)
             self.assertIn("[[hooks.UserPromptSubmit]]", config_text)
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
+            self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
+            self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
 
             uninstall(codex_home, state_dir)
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
@@ -155,7 +165,9 @@ instruction = "Local-only opening."
             install(repo, codex_home, local, state_dir)
             config = codex_home / "config.toml"
             config.write_text(
-                config.read_text(encoding="utf-8").replace("V23 scoped", "Edited V23"),
+                config.read_text(encoding="utf-8").replace(
+                    "V23 quota-exhaustion-only", "Edited V23"
+                ),
                 encoding="utf-8",
             )
 
@@ -332,7 +344,17 @@ instruction = "Local-only opening."
             self.assertTrue((codex_home / "agents/v23-executor.toml").is_file())
             self.assertTrue((codex_home / "agents/v23-reviewer.toml").is_file())
             self.assertTrue((codex_home / "skills/engineering-delivery/SKILL.md").is_file())
+            self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
+            self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
+            installed_help = subprocess.run(
+                [sys.executable, str(codex_home / "bin/grok-execution.py"), "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(installed_help.returncode, 0, installed_help.stderr)
+            self.assertIn("run", installed_help.stdout)
             self.assertIn('[agents."v23_executor"]', (codex_home / "config.toml").read_text())
             self.assertIn("[[hooks.UserPromptSubmit]]", (codex_home / "config.toml").read_text())
             tomllib.loads((codex_home / "config.toml").read_text())
@@ -353,7 +375,9 @@ instruction = "Local-only opening."
             self.assertFalse((codex_home / "v23-primary.config.toml").exists())
             self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
             self.assertFalse((codex_home / "skills/engineering-delivery").exists())
+            self.assertFalse((codex_home / "skills/grok-execution").exists())
             self.assertFalse((codex_home / "harness/v23/task_bootstrap.py").exists())
+            self.assertFalse((codex_home / "bin/grok-execution.py").exists())
 
     def test_install_preserves_unowned_hook_trust_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

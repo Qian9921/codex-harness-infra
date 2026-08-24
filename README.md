@@ -22,10 +22,10 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 The portable roles are `primary`, `executor`, and `reviewer`:
 
 - `primary` owns the request, scope, decisions, and final communication.
-- `executor` performs bounded implementation and relevant verification.
+- the external Grok bridge performs bounded implementation and relevant verification at low effort; the native `executor` is used only after a verified Grok quota-exhaustion receipt.
 - `reviewer` uses fresh context and reviews the current change read-only.
 
-The local installation maps these roles to the models and tools available on that machine. Model names, account mappings, credentials, opening instructions, and absolute paths are local configuration and are never committed here.
+The local installation maps primary, fallback executor, and reviewer roles to the native models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration; the external Grok execution identity is a portable product contract.
 
 ## Delivery
 

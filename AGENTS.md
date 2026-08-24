@@ -14,6 +14,7 @@ Work identity: execute to the judgment standard of a Principal Engineer / Resear
 
 - 先理解目标；只有会改变实现结果的实质性歧义才询问；提问时给出 2–3 个互斥方案、取舍和推荐项。
 - 默认立即开始有效工作，不把准备工作变成主任务。
+- 实现、测试、数据运行、恢复和已授权 Git 工作默认使用 `$grok-execution` 的外部 Grok 4.6 Build `low` 路由；只有收到可验证的额度耗尽 receipt 才允许切换到本机配置的 native executor fallback。
 - 默认采用最小实现和最小必要验证。
 - 默认不增加额外治理设施；新增保护必须对应具体、现实且未被现有机制覆盖的风险。
 - 讨论任务保持只读；仓库修改按 `WORKFLOW.md` 交付。
@@ -41,6 +42,7 @@ Work identity: execute to the judgment standard of a Principal Engineer / Resear
 - 先查当前仓库事实、分支和已有实现，再决定改动范围。
 - 直接使用项目已有的构建、测试和格式化工具。
 - 每个新任务开始时，V23 原生启动 Hook 必须真实检查并使用 CodeGraph、Semble 和 RTK 一次；这是用户明确要求，不属于可选路由。
+- 普通执行直接调用 Grok bridge，不把 Grok 描述为 native Codex subagent。超时、认证、网络、bridge、模型身份或 receipt 错误不授权 fallback；仅 `QUOTA_EXHAUSTED` / `grok_quota_exhausted` receipt 授权本机 `v23_executor`。
 - 若任一必需工具失败，先修复该工具或说明其明确阻塞原因，再进行无关的任务实现；只自动修复 V23 自己拥有的 Git-local CodeGraph 缓存排除项。
 - 不把一次成功的局部检查描述成整个系统已证明正确。
 - 对数据、数值和研究结论说明输入范围、比较对象和限制。
