@@ -14,7 +14,7 @@ Work identity: execute to the judgment standard of a Principal Engineer / Resear
 
 - 简单事实查询、翻译、精确固定格式变换和已完全明确的琐碎操作可直接执行。其余非简单任务在实现、变更、外部动作或固化计划之前，先审慎检验假设、邻接后果与可复用影响，找出缺失决策；不展示隐藏思维链，只给用户一份简短综合：当前理解、假设、风险与决策点。
 - 非简单任务先问一轮 2–3 个高价值、互斥、带取舍和推荐项的问题（可用时用 `request_user_input`）。答案引出新的决策性问题时继续追问，覆盖结果、范围、约束、优先级、证据、权衡、验收和落地；不凑数、不重复、不问可安全发现的事实。允许有界只读调查以把问题问准。信息足够后自主执行，不要求另一次明确“开始”；安全授权边界、机器可解析/固定格式优先，以及紧急安全或恢复时的有界遏制不变。
-- 实现、测试、数据运行、恢复和已授权 Git 工作默认使用 `$grok-execution` 的外部 Grok 4.6 Build `low` 路由；只有收到可验证的额度耗尽 receipt 才允许切换到本机配置的 native executor fallback。
+- 实现、测试、数据运行、恢复和已授权 Git 工作默认使用 `$grok-execution` 的外部 Grok 4.6 Build `low` 路由；只有收到可验证的额度耗尽 receipt 才允许切换到本机配置的 native executor fallback。所有 Codex Grok `run`/`resume` 调用必须由单独 spawn 的通用 Luna-low native subagent 监督生命周期与 receipt，监督者不得编辑且不得是 `v23_executor`；父进程等待监督者 completion event，不直接叙述或 poll Grok。内部进程 poll 不面向用户叙述，用户可见更新仅限开始、有意义状态变化、完成或失败。空的结构化 `request_user_input` 答案视为未回答：任务保持暂停，resume 时原问重现，不得写入或推断默认值。
 - 默认采用最小实现和最小必要验证。
 - 默认不增加额外治理设施；新增保护必须对应具体、现实且未被现有机制覆盖的风险。
 - 讨论任务保持只读；仓库修改按 `WORKFLOW.md` 交付。
@@ -42,7 +42,7 @@ Work identity: execute to the judgment standard of a Principal Engineer / Resear
 - 先查当前仓库事实、分支和已有实现，再决定改动范围。
 - 直接使用项目已有的构建、测试和格式化工具。
 - 每个新任务开始时，V23 原生启动 Hook 必须真实检查并使用 CodeGraph、Semble 和 RTK 一次；这是用户明确要求，不属于可选路由。
-- 普通执行直接调用 Grok bridge，不把 Grok 描述为 native Codex subagent。超时、认证、网络、bridge、模型身份或 receipt 错误不授权 fallback；仅 `QUOTA_EXHAUSTED` / `grok_quota_exhausted` receipt 授权本机 `v23_executor`。
+- 普通执行直接调用 Grok bridge，不把 Grok 描述为 native Codex subagent。run/resume 默认无墙钟超时，子进程存活且非 zombie 时继续等待；成功、结构化失败/额度耗尽、子进程死亡或 zombie 时结束。显式正超时可选。run/resume/batch 前阻塞主进程 SIGTERM/SIGHUP/SIGINT 并用 sigwait 协调线程接管；登记锁覆盖终止检查、spawn、PGID 校验与发布（含 batch 并发登记，禁止槽位覆盖），校验不可用则失败关闭。spawn 成功后立即进入 cleanup ownership：spawn 立刻签发内部 cleanup-ownership token（因 start_new_session=True，candidate PGID 即 proc.pid）；公开 registry/signal 清理仍要求 getpgid==pid；本地校验/记录失败只经该 spawn-issued candidate token kill 再 bounded reap；dedicated-PGID 校验失败、registry-full、boundary-hook 异常或后续 setup 失败都 kill/reap 已 spawn 组，仅在已登记时 unregister。协调线程用同一把锁标记 terminating、快照已校验专用 PGID 并 SIGKILL 进程组，再恢复默认并重发信号。子进程由独立 post-exec Python launcher（Popen/start_new_session，禁止 preexec_fn）在 exec 后复位/解除终止信号屏蔽，并用 getattr 将平台存在的 SIGPIPE/SIGXFSZ 恢复为 SIG_DFL（对齐 Python subprocess restore_signals）再 execvpe 真实 Grok 命令；清理仍对已校验专用 PGID 做 SIGKILL，launcher 窗口被包含在内。所有正常返回和 BaseException 路径都要终止剩余组成员并有界回收；正常完成保留直接子进程的 stdout/stderr/returncode。超时、认证、网络、bridge、模型身份或 receipt 错误不授权 fallback；仅 `QUOTA_EXHAUSTED` / `grok_quota_exhausted` receipt 授权本机 `v23_executor`。
 - 若任一必需工具失败，先修复该工具或说明其明确阻塞原因，再进行无关的任务实现；只自动修复 V23 自己拥有的 Git-local CodeGraph 缓存排除项。
 - 不把一次成功的局部检查描述成整个系统已证明正确。
 - 对数据、数值和研究结论说明输入范围、比较对象和限制。

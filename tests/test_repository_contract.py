@@ -33,7 +33,9 @@ def repository_files() -> list[Path]:
         path
         for path in ROOT.rglob("*")
         if path.is_file()
-        and not {".git", ".venv", "__pycache__"}.intersection(path.relative_to(ROOT).parts)
+        and not {".git", ".venv", "__pycache__", "artifacts"}.intersection(
+            path.relative_to(ROOT).parts
+        )
         and path.suffix != ".pyc"
     ]
 
@@ -193,6 +195,68 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertIn("Only the simple/direct exceptions", discuss_section)
         self.assertIn("stay read-only", discuss_section)
+
+    def test_empty_structured_answers_pause_without_mutation_and_re_present(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        architecture = (ROOT / "docs/architecture.md").read_text(encoding="utf-8")
+        skill = (ROOT / ".agents/skills/grok-execution/SKILL.md").read_text(encoding="utf-8")
+        executor = (ROOT / "package/agents/v23-executor.toml.in").read_text(encoding="utf-8")
+        bridge = (ROOT / "scripts/grok_execution.py").read_text(encoding="utf-8")
+        for text in (agents, portable):
+            self.assertIn("空的结构化", text)
+            self.assertIn("request_user_input", text)
+            self.assertIn("暂停", text)
+            self.assertIn("原问重现", text)
+            self.assertIn("不得写入或推断默认值", text)
+        self.assertIn("Empty structured `request_user_input` answers", workflow)
+        self.assertIn("no mutation", workflow)
+        self.assertIn("re-presented on resume", workflow)
+        self.assertIn(
+            "Empty structured `request_user_input` answers stay unanswered and paused", architecture
+        )
+        self.assertIn("separately spawned generic Luna-low native subagent", skill)
+        self.assertIn("separately spawned generic Luna-low native subagent", workflow)
+        self.assertIn("MUST be supervised", skill)
+        self.assertIn("MUST be supervised", workflow)
+        self.assertIn("MUST be supervised", architecture)
+        self.assertIn("supervisor completion event", skill)
+        self.assertIn("supervisor completion event", workflow)
+        self.assertIn("does not directly narrate or poll Grok", skill)
+        self.assertIn("does not directly narrate or poll Grok", workflow)
+        self.assertNotIn("may supervise", skill)
+        self.assertNotIn("may supervise", workflow)
+        self.assertNotIn("may supervise", architecture)
+        self.assertNotIn("may supervise", agents)
+        self.assertNotIn("may supervise", portable)
+        self.assertIn("quota-exhaustion-only fallback", skill)
+        self.assertIn("`v23_executor` remains the quota-exhaustion-only fallback", workflow)
+        self.assertIn("is not the supervisor", workflow)
+        self.assertIn("start_new_session=True", bridge)
+        self.assertNotIn("preexec_fn", bridge)
+        self.assertIn("os.execvpe", bridge)
+        self.assertIn("CHILD_LAUNCHER_FLAG", bridge)
+        self.assertIn("killpg", bridge)
+        self.assertIn("_SpawnCleanupToken", bridge)
+        self.assertIn("kill_candidate_group", bridge)
+        self.assertIn("_bounded_reap", bridge)
+        self.assertIn("if completed is None:", bridge)
+        self.assertIn("install_termination_handlers", bridge)
+        self.assertIn("_register_dedicated_pgid", bridge)
+        self.assertIn("_unregister_dedicated_pgid", bridge)
+        self.assertIn("dedicated process group validation failed", bridge)
+        self.assertIn("SIGTERM", skill)
+        self.assertIn("SIGTERM", workflow)
+        self.assertIn("SIGTERM", architecture)
+        self.assertIn("every normal return and BaseException path", skill)
+        self.assertIn("every normal return and BaseException path", workflow)
+        self.assertIn("every normal return and BaseException path", architecture)
+        self.assertIn("You are the native fallback executor for one scoped change", executor)
+        self.assertNotIn("Two mutually exclusive modes apply", executor)
+        self.assertNotIn("def structured_answers_unanswered", bridge)
+        self.assertNotIn("def apply_request_user_input", bridge)
+        self.assertNotIn("def is_user_visible_update", bridge)
 
 
 if __name__ == "__main__":
