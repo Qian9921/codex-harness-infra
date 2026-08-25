@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import scripts.install as install_mod
 from scripts.install import (
     MARKER,
     PORTABLE_KIND,
@@ -14,6 +16,7 @@ from scripts.install import (
     block_body,
     install,
     replace_managed_block,
+    sha256_bytes,
     uninstall,
 )
 
@@ -117,6 +120,9 @@ instruction = "Local-only opening."
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
             self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
+            self.assertFalse((codex_home / "AGENTS.override.md").exists())
+            manifest = json.loads((state_dir / "install.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["agents_path"], str(agents))
 
             uninstall(codex_home, state_dir)
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
@@ -205,32 +211,275 @@ instruction = "Local-only opening."
                 install(repo, codex_home, local, root / "state")
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
-    def test_install_refuses_active_global_path_transition(self) -> None:
+    def test_install_deletes_regular_global_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, local = self.make_repo(root)
             codex_home, state_dir = root / "codex", root / "state"
-            install(repo, codex_home, local, state_dir)
-            (codex_home / "AGENTS.override.md").write_text("Personal override.\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(InstallError, "path changed"):
-                install(repo, codex_home, local, state_dir)
-            self.assertIn(MARKER, (codex_home / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertNotIn(
-                MARKER, (codex_home / "AGENTS.override.md").read_text(encoding="utf-8")
+            codex_home.mkdir()
+            agents = codex_home / "AGENTS.md"
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            (codex_home / "AGENTS.override.md").write_text(
+                "Arbitrary override.\n", encoding="utf-8"
             )
 
-    def test_uninstall_allows_reinstall_after_global_override_is_created(self) -> None:
+            install(repo, codex_home, local, state_dir)
+            self.assertFalse((codex_home / "AGENTS.override.md").exists())
+            installed = agents.read_text(encoding="utf-8")
+            self.assertIn("Personal rule.", installed)
+            self.assertIn(MARKER, installed)
+            manifest = json.loads((state_dir / "install.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["agents_path"], str(agents))
+
+    def test_install_unlinks_symlink_override_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home, state_dir = root / "codex", root / "state"
+            target = root / "personal-override.md"
+            target.write_text("Keep this target.\n", encoding="utf-8")
+            codex_home.mkdir()
+            (codex_home / "AGENTS.override.md").symlink_to(target)
+
+            install(repo, codex_home, local, state_dir)
+            self.assertFalse((codex_home / "AGENTS.override.md").exists())
+            self.assertFalse((codex_home / "AGENTS.override.md").is_symlink())
+            self.assertEqual(target.read_text(encoding="utf-8"), "Keep this target.\n")
+            self.assertIn(MARKER, (codex_home / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_install_refuses_directory_override_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home, state_dir = root / "codex", root / "state"
+            codex_home.mkdir()
+            agents = codex_home / "AGENTS.md"
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            override = codex_home / "AGENTS.override.md"
+            override.mkdir()
+            (override / "nested.txt").write_text("keep\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(InstallError, "unsafe global override"):
+                install(repo, codex_home, local, state_dir)
+            self.assertTrue(override.is_dir())
+            self.assertEqual((override / "nested.txt").read_text(encoding="utf-8"), "keep\n")
+            self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
+            self.assertFalse((codex_home / "config.toml").exists())
+            self.assertFalse((state_dir / "install.json").exists())
+
+    def test_install_migrates_existing_override_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, local = self.make_repo(root)
             codex_home, state_dir = root / "codex", root / "state"
             install(repo, codex_home, local, state_dir)
-            uninstall(codex_home, state_dir)
-            (codex_home / "AGENTS.override.md").write_text("Personal override.\n", encoding="utf-8")
+            agents = codex_home / "AGENTS.md"
+            override = codex_home / "AGENTS.override.md"
+            override.write_text(agents.read_text(encoding="utf-8"), encoding="utf-8")
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            manifest_path = state_dir / "install.json"
+            record = json.loads(manifest_path.read_text(encoding="utf-8"))
+            record["agents_path"] = str(override)
+            manifest_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 
             install(repo, codex_home, local, state_dir)
-            self.assertIn(MARKER, (codex_home / "AGENTS.override.md").read_text(encoding="utf-8"))
+            self.assertFalse(override.exists())
+            installed = agents.read_text(encoding="utf-8")
+            self.assertIn("Personal rule.", installed)
+            self.assertIn(MARKER, installed)
+            migrated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated["agents_path"], str(agents))
+
+            uninstall(codex_home, state_dir)
+            self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
+            self.assertFalse(override.exists())
+            self.assertFalse(manifest_path.exists())
+
+    KNOWN_V21_FIXTURE = (
+        "# Codex Governance Infra V21 personal kernel\n"
+        "\n"
+        "This is the V21 policy installed at `CODEX_HOME/AGENTS.md`.\n"
+        "\n"
+        "Obsolete route tokens: grok-4.5-flash-native, v21_executor, CODEX_HOME/AGENTS.md kernel.\n"
+        "Keep none of this after V23 migration.\n"
+    )
+
+    def _with_known_v21_fixture(self) -> None:
+        blob = self.KNOWN_V21_FIXTURE.encode()
+        install_mod.KNOWN_V21_KERNEL_SIZE = len(blob)
+        install_mod.KNOWN_V21_KERNEL_SHA256 = sha256_bytes(blob)
+
+    def _restore_known_v21_constants(self) -> None:
+        install_mod.KNOWN_V21_KERNEL_SIZE = 10192
+        install_mod.KNOWN_V21_KERNEL_SHA256 = (
+            "49045df930cac1d0148575ad3f94b193383e4eee8abdb54e3472ccbef6a73bf7"
+        )
+
+    def test_install_replaces_known_v21_kernel_and_uninstall_does_not_restore_it(self) -> None:
+        self._with_known_v21_fixture()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo, local = self.make_repo(root)
+                codex_home, state_dir = root / "codex", root / "state"
+                codex_home.mkdir()
+                agents = codex_home / "AGENTS.md"
+                agents.write_text(self.KNOWN_V21_FIXTURE, encoding="utf-8")
+
+                install(repo, codex_home, local, state_dir)
+                installed = agents.read_text(encoding="utf-8")
+                self.assertNotIn("# Codex Governance Infra V21 personal kernel", installed)
+                self.assertNotIn(
+                    "This is the V21 policy installed at `CODEX_HOME/AGENTS.md`.", installed
+                )
+                self.assertNotIn("grok-4.5-flash-native", installed)
+                self.assertNotIn("v21_executor", installed)
+                self.assertIn(MARKER, installed)
+
+                uninstall(codex_home, state_dir)
+                remaining = agents.read_text(encoding="utf-8") if agents.exists() else ""
+                self.assertNotIn("# Codex Governance Infra V21 personal kernel", remaining)
+                self.assertNotIn(
+                    "This is the V21 policy installed at `CODEX_HOME/AGENTS.md`.", remaining
+                )
+                self.assertNotIn("grok-4.5-flash-native", remaining)
+                self.assertNotIn("v21_executor", remaining)
+        finally:
+            self._restore_known_v21_constants()
+
+    def test_install_refuses_v21_plus_appended_personal_content_before_mutation(self) -> None:
+        self._with_known_v21_fixture()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo, local = self.make_repo(root)
+                codex_home, state_dir = root / "codex", root / "state"
+                codex_home.mkdir()
+                agents = codex_home / "AGENTS.md"
+                original = self.KNOWN_V21_FIXTURE + "Keep my personal appendix.\n"
+                agents.write_bytes(original.encode())
+                before = agents.read_bytes()
+                with self.assertRaises(InstallError) as raised:
+                    install(repo, codex_home, local, state_dir)
+                self.assertIn("unrecognized V21-like AGENTS.md", str(raised.exception))
+                self.assertEqual(agents.read_bytes(), before)
+                self.assertEqual(agents.read_bytes().decode(), original)
+                self.assertFalse((state_dir / "install.json").exists())
+                self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
+        finally:
+            self._restore_known_v21_constants()
+
+    def test_install_refuses_signature_like_unknown_v21_variant(self) -> None:
+        self._with_known_v21_fixture()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo, local = self.make_repo(root)
+                codex_home, state_dir = root / "codex", root / "state"
+                codex_home.mkdir()
+                agents = codex_home / "AGENTS.md"
+                variant = (
+                    "# Codex Governance Infra V21 personal kernel\n"
+                    "\n"
+                    "This is the V21 policy installed at `CODEX_HOME/AGENTS.md`.\n"
+                    "\n"
+                    "Unknown local variant, not the authorized digest.\n"
+                )
+                agents.write_text(variant, encoding="utf-8")
+                before = agents.read_bytes()
+                with self.assertRaises(InstallError) as raised:
+                    install(repo, codex_home, local, state_dir)
+                self.assertIn("unrecognized V21-like AGENTS.md", str(raised.exception))
+                self.assertEqual(agents.read_bytes(), before)
+                self.assertFalse((state_dir / "install.json").exists())
+        finally:
+            self._restore_known_v21_constants()
+
+    def test_install_does_not_treat_ordinary_agents_as_v21_kernel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home, state_dir = root / "codex", root / "state"
+            codex_home.mkdir()
+            agents = codex_home / "AGENTS.md"
+            original = "Personal rule mentioning V21 casually.\nThis is not the installed kernel.\n"
+            agents.write_text(original, encoding="utf-8")
+            install(repo, codex_home, local, state_dir)
+            installed = agents.read_text(encoding="utf-8")
+            self.assertIn("Personal rule mentioning V21 casually.", installed)
+            self.assertIn(original.strip(), installed)
+
+    def test_manifest_write_failure_keeps_override_and_retry_succeeds_fresh(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home, state_dir = root / "codex", root / "state"
+            codex_home.mkdir()
+            agents = codex_home / "AGENTS.md"
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            override = codex_home / "AGENTS.override.md"
+            override.write_text("Arbitrary override.\n", encoding="utf-8")
+            manifest_path = state_dir / "install.json"
+            install_mod._injected_atomic_write_failure = manifest_path
+            try:
+                with self.assertRaises(OSError):
+                    install(repo, codex_home, local, state_dir)
+            finally:
+                install_mod._injected_atomic_write_failure = None
+            self.assertTrue(override.is_file())
+            self.assertEqual(override.read_text(encoding="utf-8"), "Arbitrary override.\n")
+            self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
+            self.assertFalse(manifest_path.exists())
+            self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
+            self.assertFalse((codex_home / "bin/grok-execution.py").exists())
+
+            install(repo, codex_home, local, state_dir)
+            self.assertFalse(override.exists())
+            self.assertIn(MARKER, agents.read_text(encoding="utf-8"))
+            self.assertTrue(manifest_path.is_file())
+
+    def test_manifest_write_failure_keeps_override_and_retry_succeeds_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home, state_dir = root / "codex", root / "state"
+            install(repo, codex_home, local, state_dir)
+            agents = codex_home / "AGENTS.md"
+            override = codex_home / "AGENTS.override.md"
+            previous_agents = agents.read_text(encoding="utf-8")
+            previous_executor = (codex_home / "agents/v23-executor.toml").read_text(
+                encoding="utf-8"
+            )
+            override.write_text(previous_agents, encoding="utf-8")
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            manifest_path = state_dir / "install.json"
+            previous_manifest = manifest_path.read_text(encoding="utf-8")
+            record = json.loads(previous_manifest)
+            record["agents_path"] = str(override)
+            manifest_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            restored_manifest = manifest_path.read_text(encoding="utf-8")
+
+            install_mod._injected_atomic_write_failure = manifest_path
+            try:
+                with self.assertRaises(OSError):
+                    install(repo, codex_home, local, state_dir)
+            finally:
+                install_mod._injected_atomic_write_failure = None
+            self.assertTrue(override.is_file())
+            self.assertEqual(override.read_text(encoding="utf-8"), previous_agents)
+            self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), restored_manifest)
+            self.assertEqual(
+                (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8"),
+                previous_executor,
+            )
+
+            install(repo, codex_home, local, state_dir)
+            self.assertFalse(override.exists())
+            self.assertEqual(
+                json.loads(manifest_path.read_text(encoding="utf-8"))["agents_path"],
+                str(agents),
+            )
 
     def test_install_refuses_symlink_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -355,6 +604,8 @@ instruction = "Local-only opening."
             )
             self.assertEqual(installed_help.returncode, 0, installed_help.stderr)
             self.assertIn("run", installed_help.stdout)
+            self.assertFalse((codex_home / "AGENTS.override.md").exists())
+            self.assertIn(MARKER, (codex_home / "AGENTS.md").read_text(encoding="utf-8"))
             self.assertIn('[agents."v23_executor"]', (codex_home / "config.toml").read_text())
             self.assertIn("[[hooks.UserPromptSubmit]]", (codex_home / "config.toml").read_text())
             tomllib.loads((codex_home / "config.toml").read_text())

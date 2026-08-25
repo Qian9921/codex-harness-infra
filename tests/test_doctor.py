@@ -62,6 +62,9 @@ rtk = "rtk"
             )
             checks = {check["name"]: check for check in report["checks"]}
             self.assertTrue(report["ok"])
+            self.assertEqual(report["active_global_instruction"], str(codex_home / "AGENTS.md"))
+            self.assertTrue(checks["global_agents_canonical"]["ok"])
+            self.assertTrue(checks["global_override_absent"]["ok"])
             self.assertTrue(checks["codex_config_syntax"]["ok"])
             self.assertTrue(checks["primary_profile"]["ok"])
             self.assertTrue(checks["agent_v23_executor"]["ok"])
@@ -76,6 +79,60 @@ rtk = "rtk"
             self.assertTrue(checks["tool_rtk"]["ok"])
             self.assertEqual(report["project_instruction_candidates"], [str(ROOT / "AGENTS.md")])
             self.assertEqual(report["primary_profile_start"], "codex --profile v23-primary")
+
+            (codex_home / "AGENTS.override.md").write_text("leftover override\n", encoding="utf-8")
+            blocked = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                tool_probe=lambda _cwd, _prompt, _tools: [
+                    ToolResult("CodeGraph", True, "queried"),
+                    ToolResult("Semble", True, "searched"),
+                    ToolResult("RTK", True, "inspected"),
+                ],
+            )
+            blocked_checks = {check["name"]: check for check in blocked["checks"]}
+            self.assertFalse(blocked["ok"])
+            self.assertFalse(blocked_checks["global_override_absent"]["ok"])
+            self.assertEqual(
+                blocked["active_global_instruction"], str(codex_home / "AGENTS.override.md")
+            )
+            self.assertTrue(blocked_checks["global_portable"]["ok"])
+            self.assertTrue(blocked_checks["global_local"]["ok"])
+
+            (codex_home / "AGENTS.override.md").write_text("   \n", encoding="utf-8")
+            skipped = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                tool_probe=lambda _cwd, _prompt, _tools: [
+                    ToolResult("CodeGraph", True, "queried"),
+                    ToolResult("Semble", True, "searched"),
+                    ToolResult("RTK", True, "inspected"),
+                ],
+            )
+            skipped_checks = {check["name"]: check for check in skipped["checks"]}
+            self.assertTrue(skipped["ok"])
+            self.assertTrue(skipped_checks["global_override_absent"]["ok"])
+            self.assertEqual(skipped["active_global_instruction"], str(codex_home / "AGENTS.md"))
+
+            (codex_home / "AGENTS.override.md").unlink()
+            recovered = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                tool_probe=lambda _cwd, _prompt, _tools: [
+                    ToolResult("CodeGraph", True, "queried"),
+                    ToolResult("Semble", True, "searched"),
+                    ToolResult("RTK", True, "inspected"),
+                ],
+            )
+            recovered_checks = {check["name"]: check for check in recovered["checks"]}
+            self.assertTrue(recovered["ok"])
+            self.assertTrue(recovered_checks["global_override_absent"]["ok"])
 
 
 if __name__ == "__main__":

@@ -29,12 +29,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-VERSION = "23.1.0"
+VERSION = "23.1.1"
 MARKER = "CODEX-HARNESS-INFRA V23"
 PORTABLE_KIND = "PORTABLE"
 LOCAL_KIND = "LOCAL"
 CONFIG_KIND = "CONFIG"
 MANIFEST_NAME = "install.json"
+V21_KERNEL_TITLE = "# Codex Governance Infra V21 personal kernel"
+V21_KERNEL_POLICY = "This is the V21 policy installed at `CODEX_HOME/AGENTS.md`."
+# Exact current legacy V21 kernel at ${CODEX_HOME}/AGENTS.md; not a text-prefix match.
+KNOWN_V21_KERNEL_SIZE = 10192
+KNOWN_V21_KERNEL_SHA256 = "49045df930cac1d0148575ad3f94b193383e4eee8abdb54e3472ccbef6a73bf7"
+
+# Tests may set this to one path to inject a single atomic-write failure.
+_injected_atomic_write_failure: Path | None = None
 
 
 class InstallError(RuntimeError):
@@ -123,7 +131,7 @@ def remove_managed_block(text: str, kind: str, expected_digest: str) -> tuple[st
     return (joined + "\n") if joined else "", True
 
 
-def atomic_write(path: Path, content: str | bytes) -> None:
+def atomic_write(path: Path, content: str | bytes, *, allow_inject: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise InstallError(f"refusing symlink target: {path}")
@@ -132,10 +140,85 @@ def atomic_write(path: Path, content: str | bytes) -> None:
     try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(data)
+        global _injected_atomic_write_failure
+        if (
+            allow_inject
+            and _injected_atomic_write_failure is not None
+            and path.resolve(strict=False) == _injected_atomic_write_failure.resolve(strict=False)
+        ):
+            _injected_atomic_write_failure = None
+            raise OSError(f"injected atomic write failure: {path}")
         os.replace(name, path)
     except BaseException:
         Path(name).unlink(missing_ok=True)
         raise
+
+
+def _utf8_normalized_newlines(data: bytes) -> bytes | None:
+    """Return UTF-8 bytes with newlines folded to ``\\n``, or None if not UTF-8."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode()
+
+
+def has_v21_kernel_signature(text: str) -> bool:
+    """True when the V21 identity markers are present; not proof of the known file."""
+    return text.startswith(V21_KERNEL_TITLE) and V21_KERNEL_POLICY in text
+
+
+def is_retired_v21_kernel(data: bytes | str) -> bool:
+    """True only for the exact known V21 kernel bytes or an unambiguous newline fold."""
+    raw = data.encode() if isinstance(data, str) else data
+    if len(raw) == KNOWN_V21_KERNEL_SIZE and sha256_bytes(raw) == KNOWN_V21_KERNEL_SHA256:
+        return True
+    normalized = _utf8_normalized_newlines(raw)
+    # Accept CRLF (or CR) folds only when they hash to the same unique known digest
+    # and the folded payload is the same size as the authorized file.
+    return (
+        normalized is not None
+        and normalized != raw
+        and len(normalized) == KNOWN_V21_KERNEL_SIZE
+        and sha256_bytes(normalized) == KNOWN_V21_KERNEL_SHA256
+    )
+
+
+def agents_text_after_v21_recognition(raw: bytes) -> str:
+    """Return preserved AGENTS.md text, empty for exact V21, or raise before mutation."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise InstallError(f"AGENTS.md is not valid UTF-8: {error}") from error
+    if is_retired_v21_kernel(raw):
+        return ""
+    if has_v21_kernel_signature(text):
+        raise InstallError(
+            "unrecognized V21-like AGENTS.md: the V21 kernel signature is present, "
+            "but the file is not the exact known V21 kernel "
+            f"({KNOWN_V21_KERNEL_SIZE} bytes, SHA-256 {KNOWN_V21_KERNEL_SHA256}). "
+            "Refusing to replace mixed or variant content. Move personal text aside "
+            "or restore the exact known V21 kernel before installing."
+        )
+    return text
+
+
+def nonempty_instruction_file(path: Path) -> bool:
+    """True when a file exists and is non-empty after stripping, matching skip-empty."""
+    if not path.is_file():
+        return False
+    try:
+        return bool(path.read_text().strip())
+    except OSError:
+        return False
+
+
+def effective_global_instruction(codex_home: Path) -> Path:
+    """Return the instruction Codex would activate at global scope."""
+    override = global_override_path(codex_home)
+    if nonempty_instruction_file(override):
+        return override
+    return codex_home / "AGENTS.md"
 
 
 def read_toml(path: Path) -> dict:
@@ -202,9 +285,83 @@ def resolve_python_runtime(config: dict) -> Path:
 
 
 def active_global_agents(codex_home: Path) -> Path:
-    """Respect Codex's global override precedence instead of creating a shadow file."""
-    override = codex_home / "AGENTS.override.md"
-    return override if override.exists() else codex_home / "AGENTS.md"
+    """Return the canonical V23 global instruction file, always AGENTS.md."""
+    return codex_home / "AGENTS.md"
+
+
+@dataclass
+class _PathSnapshot:
+    path: Path
+    kind: str
+    data: bytes | None = None
+    tree: Path | None = None
+
+
+def _snapshot_path(path: Path) -> _PathSnapshot:
+    if path.is_symlink():
+        raise InstallError(f"refusing symlink target: {path}")
+    if not path.exists():
+        return _PathSnapshot(path, "missing")
+    if path.is_file():
+        return _PathSnapshot(path, "file", path.read_bytes())
+    if path.is_dir():
+        staging = Path(tempfile.mkdtemp(prefix=f".rollback-{path.name}."))
+        shutil.copytree(path, staging / path.name, symlinks=False)
+        return _PathSnapshot(path, "directory", tree=staging / path.name)
+    raise InstallError(f"unsupported rollback target: {path}")
+
+
+def _restore_path(snapshot: _PathSnapshot) -> None:
+    path = snapshot.path
+    if snapshot.kind == "missing":
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        elif path.exists() or path.is_symlink():
+            path.unlink()
+        return
+    if snapshot.kind == "file":
+        atomic_write(path, snapshot.data or b"", allow_inject=False)
+        return
+    if snapshot.kind == "directory" and snapshot.tree is not None:
+        if path.exists() or path.is_symlink():
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(snapshot.tree, path, symlinks=False)
+
+
+def _discard_snapshot(snapshot: _PathSnapshot) -> None:
+    if snapshot.tree is not None:
+        shutil.rmtree(snapshot.tree.parent, ignore_errors=True)
+
+
+def global_override_path(codex_home: Path) -> Path:
+    return codex_home / "AGENTS.override.md"
+
+
+def _override_present(path: Path) -> bool:
+    return path.is_symlink() or path.exists()
+
+
+def _validate_global_override(path: Path) -> None:
+    """Refuse a non-file override shape; do not recurse into directories."""
+    if not _override_present(path):
+        return
+    if path.is_symlink() or path.is_file():
+        return
+    raise InstallError(f"refusing unsafe global override path: {path}")
+
+
+def _unlink_global_override(path: Path) -> None:
+    """Unlink a regular or symlink override; never follow a symlink target."""
+    if not _override_present(path):
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return
+    raise InstallError(f"refusing unsafe global override path: {path}")
 
 
 def ensure_within(root: Path, path: Path) -> Path:
@@ -451,16 +608,19 @@ def _validate_agent_content(content: str, name: str, model: str, effort: str) ->
 def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Path) -> None:
     """Install V23 into an empty or previously V23-managed local area."""
     repo_root, codex_home = repo_root.resolve(), codex_home.resolve()
+    agents_path, codex_config = active_global_agents(codex_home), codex_home / "config.toml"
+    override_path = global_override_path(codex_home)
+    _validate_global_override(override_path)
+    for path in (agents_path, codex_config):
+        if path.is_symlink():
+            raise InstallError(f"refusing symlink managed file: {path}")
+    agent_raw = agents_path.read_bytes() if agents_path.exists() else b""
+    agent_text = agents_text_after_v21_recognition(agent_raw)
     state_dir = _safe_state_dir(state_dir)
     _prepare_state_dir(state_dir)
     config = read_toml(local_config)
     runtime_python = resolve_python_runtime(config)
     manifest = _load_manifest(state_dir)
-    agents_path, codex_config = active_global_agents(codex_home), codex_home / "config.toml"
-    if manifest is not None and manifest.get("agents_path") != str(agents_path):
-        raise InstallError(
-            "active global instruction path changed; uninstall the intact V23 installation before reinstalling"
-        )
     portable = (repo_root / "package/global-portable.md").read_text().strip()
     opening = config.get("opening", {})
     if not isinstance(opening, dict):
@@ -469,10 +629,6 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     if not isinstance(local, str) or not local.strip():
         raise InstallError("[opening].instruction must contain the local-only opening rule")
     local = local.strip()
-    for path in (agents_path, codex_config):
-        if path.is_symlink():
-            raise InstallError(f"refusing symlink managed file: {path}")
-    agent_text = agents_path.read_text() if agents_path.exists() else ""
     config_text = codex_config.read_text() if codex_config.exists() else ""
     block_body(agent_text, PORTABLE_KIND)
     block_body(agent_text, LOCAL_KIND)
@@ -493,23 +649,41 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         tomllib.loads(rendered_config)
     except tomllib.TOMLDecodeError as error:
         raise InstallError(f"refusing invalid rendered Codex config: {error}") from error
-    atomic_write(agents_path, rendered_agents)
-    atomic_write(codex_config, rendered_config)
-    for asset in assets:
-        asset.path.parent.mkdir(parents=True, exist_ok=True)
-        _copy_asset(asset)
-    record = {
-        "version": VERSION,
-        "agents_path": str(agents_path),
-        "portable_digest": sha256_bytes(portable.encode()),
-        "local_digest": sha256_bytes(local.encode()),
-        "config_digest": sha256_bytes(config_block.encode()),
-        "assets": [
-            {"path": str(asset.path), "digest": digest_path(asset.path), "kind": asset.kind}
-            for asset in assets
-        ],
-    }
-    atomic_write(state_dir / MANIFEST_NAME, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    snapshots = [
+        _snapshot_path(agents_path),
+        _snapshot_path(codex_config),
+        *(_snapshot_path(asset.path) for asset in assets),
+        _snapshot_path(state_dir / MANIFEST_NAME),
+    ]
+    mutated = False
+    try:
+        atomic_write(agents_path, rendered_agents)
+        mutated = True
+        atomic_write(codex_config, rendered_config)
+        for asset in assets:
+            asset.path.parent.mkdir(parents=True, exist_ok=True)
+            _copy_asset(asset)
+        record = {
+            "version": VERSION,
+            "agents_path": str(agents_path),
+            "portable_digest": sha256_bytes(portable.encode()),
+            "local_digest": sha256_bytes(local.encode()),
+            "config_digest": sha256_bytes(config_block.encode()),
+            "assets": [
+                {"path": str(asset.path), "digest": digest_path(asset.path), "kind": asset.kind}
+                for asset in assets
+            ],
+        }
+        atomic_write(state_dir / MANIFEST_NAME, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    except BaseException:
+        if mutated:
+            for snapshot in reversed(snapshots):
+                _restore_path(snapshot)
+        raise
+    finally:
+        for snapshot in snapshots:
+            _discard_snapshot(snapshot)
+    _unlink_global_override(override_path)
 
 
 def uninstall(codex_home: Path, state_dir: Path) -> list[str]:

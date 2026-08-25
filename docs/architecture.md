@@ -8,7 +8,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Portable policy
 
-`AGENTS.md` is the short, always-relevant repository policy. It contains the identity standard, direct-work preference, review boundary, delegation limits, and evidence rules. It contains no machine facts.
+`AGENTS.md` is the short, always-relevant policy. In a repository it is the project instruction file. At Codex home it is also the canonical V23 global instruction file: `${CODEX_HOME}/AGENTS.md`. Official Codex precedence makes a non-empty `AGENTS.override.md` completely suppress `AGENTS.md` at that scope and skips an empty override, so V23 never installs that override and removes it on install or upgrade. A known V21 installed kernel is retired in full and replaced by V23 managed blocks only when `${CODEX_HOME}/AGENTS.md` is the exact authorized legacy file (10192 bytes, SHA-256 `49045df930cac1d0148575ad3f94b193383e4eee8abdb54e3472ccbef6a73bf7`) or an unambiguous newline-normalized form of that same digest. If the V21 identity markers are present but the complete content is not that file, installation fails before mutation. Ordinary unmanaged `AGENTS.md` text is preserved. The portable file contains the identity standard, direct-work preference, review boundary, delegation limits, and evidence rules. It contains no machine facts.
 
 ### Workflow agreement
 
