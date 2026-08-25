@@ -8,9 +8,11 @@ import json
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -20,8 +22,18 @@ ACTUAL_MODEL = "grok-4.6-build"
 EXECUTION_EFFORT = "low"
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
-DEFAULT_TIMEOUT_SECONDS = 600
+DEFAULT_TIMEOUT_SECONDS = None
+POLL_INTERVAL_SECONDS = 1.0
+DRAIN_TIMEOUT_SECONDS = 1.0
 MAX_PARALLEL = 2
+_SIGNAL_PGID_SLOTS = 8
+_REGISTERED_PGIDS = [0] * _SIGNAL_PGID_SLOTS
+_TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+_REGISTRY_LOCK = threading.Lock()
+_TERMINATING = False
+_termination_handlers_installed = False
+_SPAWN_BOUNDARY_HOOK: Any = None
+CHILD_LAUNCHER_FLAG = "--v23-exec-child"
 
 
 class BridgeError(RuntimeError):
@@ -226,6 +238,352 @@ def _command(
     return command
 
 
+def _positive_timeout(value: Any, *, label: str = "timeout") -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value <= 0:
+        raise BridgeError(f"{label} must be a positive integer when set")
+    return value
+
+
+def _proc_state(pid: int) -> str | None:
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    close = stat.rfind(")")
+    if close == -1:
+        return None
+    fields = stat[close + 2 :].split()
+    if not fields:
+        return None
+    return fields[0]
+
+
+def default_is_alive(proc: subprocess.Popen[str]) -> bool:
+    if proc.poll() is not None:
+        return False
+    return _proc_state(proc.pid) != "Z"
+
+
+def default_is_zombie(proc: subprocess.Popen[str]) -> bool:
+    if proc.poll() is not None:
+        return False
+    return _proc_state(proc.pid) == "Z"
+
+
+def _record_dedicated_pgid(proc: Any) -> None:
+    pid = getattr(proc, "pid", None)
+    pgid: int | None = None
+    if type(pid) is int and pid > 1:
+        try:
+            pgid = os.getpgid(pid)
+        except OSError:
+            pgid = None
+        if pgid != pid or pgid in (os.getpid(), os.getpgrp()):
+            pgid = None
+    proc._v23_pgid = pgid
+
+
+def _child_reset_inherited_signal_mask() -> None:
+    for signum in _TERMINATION_SIGNALS:
+        signal.signal(signum, signal.SIG_DFL)
+    for name in ("SIGPIPE", "SIGXFSZ"):
+        signum = getattr(signal, name, None)
+        if isinstance(signum, int):
+            signal.signal(signum, signal.SIG_DFL)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, _TERMINATION_SIGNALS)
+
+
+def _module_path() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve()
+
+
+def _validate_child_launcher_target(command: Sequence[str]) -> list[str]:
+    if not command:
+        raise BridgeError("child launcher command is empty")
+    argv = [str(item) for item in command]
+    if not argv[0] or argv[0].startswith("-"):
+        raise BridgeError("child launcher command is invalid")
+    target = pathlib.Path(argv[0])
+    if (target.is_absolute() or "/" in argv[0]) and (
+        not target.is_file() or not os.access(target, os.X_OK)
+    ):
+        raise BridgeError("child launcher target is not an executable file")
+    return argv
+
+
+def _child_launcher_argv(command: Sequence[str]) -> list[str]:
+    launcher = _module_path()
+    if launcher.name not in {"grok_execution.py", "grok-execution.py"} or not launcher.is_file():
+        raise BridgeError("child launcher path is invalid")
+    return [
+        sys.executable,
+        str(launcher),
+        CHILD_LAUNCHER_FLAG,
+        "--",
+        *_validate_child_launcher_target(command),
+    ]
+
+
+def _run_child_launcher(argv: Sequence[str]) -> None:
+    if not argv or argv[0] != "--" or len(argv) < 2:
+        raise SystemExit("invalid child launcher arguments")
+    target = [str(item) for item in argv[1:]]
+    _child_reset_inherited_signal_mask()
+    os.execvpe(target[0], target, os.environ)
+
+
+class _SpawnCleanupToken:
+    """Internal spawn-issued cleanup ownership.
+
+    Invariant: `_spawn_grok` always uses `start_new_session=True`, so the
+    dedicated candidate PGID equals `proc.pid` at Popen success and does not
+    depend on a later `os.getpgid` read. This type is constructed only from
+    the live child; callers cannot supply an untrusted PGID. Public registry
+    and signal cleanup still require `os.getpgid(proc.pid) == proc.pid`.
+    """
+
+    __slots__ = ("_candidate_pgid", "_proc")
+
+    def __init__(self, proc: Any) -> None:
+        pid = getattr(proc, "pid", None)
+        if type(pid) is not int or pid <= 1:
+            raise BridgeError("dedicated process group validation failed")
+        self._proc = proc
+        self._candidate_pgid = pid
+
+    def kill_candidate_group(self) -> None:
+        candidate = self._candidate_pgid
+        if (
+            type(candidate) is int
+            and candidate > 1
+            and candidate not in (os.getpid(), os.getpgrp())
+        ):
+            try:
+                os.killpg(candidate, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            self._proc.kill()
+        except (OSError, AttributeError):
+            pass
+
+
+def _spawn_grok(command: Sequence[str], cwd: pathlib.Path) -> subprocess.Popen[str]:
+    proc = subprocess.Popen(
+        _child_launcher_argv(command),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    proc._v23_cleanup_token = _SpawnCleanupToken(proc)
+    _record_dedicated_pgid(proc)
+    return proc
+
+
+def _snapshot_registered_pgids() -> list[int]:
+    snapshot: list[int] = []
+    for index in range(_SIGNAL_PGID_SLOTS):
+        pgid = _REGISTERED_PGIDS[index]
+        if type(pgid) is int and pgid > 1:
+            snapshot.append(pgid)
+    return snapshot
+
+
+def _kill_registered_dedicated_groups(pgids: Sequence[int] | None = None) -> None:
+    for pgid in list(pgids) if pgids is not None else _snapshot_registered_pgids():
+        if type(pgid) is not int or pgid <= 1:
+            continue
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _termination_coordinator() -> None:
+    global _TERMINATING
+    signum = signal.sigwait(set(_TERMINATION_SIGNALS))
+    with _REGISTRY_LOCK:
+        _TERMINATING = True
+        snapshot = _snapshot_registered_pgids()
+    _kill_registered_dedicated_groups(snapshot)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signum})
+    os.kill(os.getpid(), signum)
+    os._exit(128 + int(signum))
+
+
+def install_termination_handlers() -> None:
+    global _termination_handlers_installed
+    if _termination_handlers_installed:
+        return
+    signal.pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
+    threading.Thread(
+        target=_termination_coordinator,
+        name="v23-grok-sigwait",
+        daemon=True,
+    ).start()
+    _termination_handlers_installed = True
+
+
+def _register_dedicated_pgid_unlocked(pgid: int) -> None:
+    if type(pgid) is not int or pgid <= 1:
+        raise BridgeError("dedicated process group validation failed")
+    for index in range(_SIGNAL_PGID_SLOTS):
+        if _REGISTERED_PGIDS[index] == 0:
+            _REGISTERED_PGIDS[index] = pgid
+            return
+    raise BridgeError("dedicated process group registry is full")
+
+
+def _register_dedicated_pgid(pgid: int) -> None:
+    with _REGISTRY_LOCK:
+        if _TERMINATING:
+            raise BridgeError("process is terminating")
+        _register_dedicated_pgid_unlocked(pgid)
+
+
+def _unregister_dedicated_pgid(pgid: int) -> None:
+    if type(pgid) is not int or pgid <= 1:
+        return
+    with _REGISTRY_LOCK:
+        for index in range(_SIGNAL_PGID_SLOTS):
+            if _REGISTERED_PGIDS[index] == pgid:
+                _REGISTERED_PGIDS[index] = 0
+                return
+
+
+def _owns_dedicated_group(proc: Any) -> bool:
+    expected = getattr(proc, "_v23_pgid", None)
+    pid = getattr(proc, "pid", None)
+    if type(expected) is not int or expected <= 1:
+        return False
+    if type(pid) is not int or expected != pid:
+        return False
+    if expected in (os.getpid(), os.getpgrp()):
+        return False
+    try:
+        current = os.getpgid(pid)
+    except OSError:
+        current = expected
+    return current == expected
+
+
+def _terminate_dedicated_group(proc: Any) -> None:
+    if _owns_dedicated_group(proc):
+        try:
+            os.killpg(proc._v23_pgid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except (OSError, AttributeError):
+        pass
+
+
+def _kill_spawned_group(proc: Any) -> None:
+    if _owns_dedicated_group(proc):
+        _terminate_dedicated_group(proc)
+        return
+    token = getattr(proc, "_v23_cleanup_token", None)
+    if isinstance(token, _SpawnCleanupToken):
+        token.kill_candidate_group()
+        return
+    _terminate_dedicated_group(proc)
+
+
+def _bounded_reap(proc: Any, timeout: float = DRAIN_TIMEOUT_SECONDS) -> tuple[str, str]:
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_spawned_group(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except (OSError, ValueError, subprocess.TimeoutExpired, AttributeError):
+            stdout, stderr = "", ""
+    except (OSError, ValueError, AttributeError):
+        stdout, stderr = "", ""
+    return stdout or "", stderr or ""
+
+
+def _stop_group_and_reap(proc: Any) -> tuple[str, str]:
+    _kill_spawned_group(proc)
+    return _bounded_reap(proc)
+
+
+def _supervised_run(
+    command: Sequence[str],
+    cwd: pathlib.Path,
+    *,
+    timeout: int | None,
+    spawn: Any = _spawn_grok,
+    is_alive: Any = default_is_alive,
+    is_zombie: Any = default_is_zombie,
+    sleep: Any = time.sleep,
+    clock: Any = time.monotonic,
+    poll_interval: float = POLL_INTERVAL_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    proc: Any = None
+    pgid: int | None = None
+    registered = False
+    completed: subprocess.CompletedProcess[str] | None = None
+    try:
+        with _REGISTRY_LOCK:
+            if _TERMINATING:
+                raise BridgeError("process is terminating")
+            proc = spawn(command, cwd)
+            if not hasattr(proc, "_v23_pgid") or getattr(proc, "_v23_pgid", None) is None:
+                _record_dedicated_pgid(proc)
+            if not _owns_dedicated_group(proc):
+                raise BridgeError("dedicated process group validation failed")
+            hook = _SPAWN_BOUNDARY_HOOK
+            if hook is not None:
+                hook()
+            pgid = proc._v23_pgid
+            _register_dedicated_pgid_unlocked(pgid)
+            registered = True
+        started = clock()
+        while True:
+            remaining: float | None = None
+            if timeout is not None:
+                remaining = timeout - (clock() - started)
+                if remaining <= 0:
+                    raise BridgeError(f"grok exceeded the {timeout}s bridge timeout")
+            slice_timeout = poll_interval if timeout is None else min(poll_interval, remaining)
+            try:
+                stdout, stderr = proc.communicate(timeout=slice_timeout)
+            except subprocess.TimeoutExpired:
+                code = proc.poll()
+                if code is not None:
+                    stdout, stderr = _stop_group_and_reap(proc)
+                    completed = subprocess.CompletedProcess(list(command), code, stdout, stderr)
+                    return completed
+                if is_zombie(proc):
+                    raise BridgeError("grok child process became a zombie") from None
+                if not is_alive(proc):
+                    raise BridgeError("grok child process died before returning a result") from None
+                sleep(0)
+                continue
+            code = proc.returncode
+            if code is None:
+                code = 0
+            completed = subprocess.CompletedProcess(list(command), code, stdout or "", stderr or "")
+            return completed
+    finally:
+        if proc is not None:
+            try:
+                if completed is None:
+                    _stop_group_and_reap(proc)
+                else:
+                    _terminate_dedicated_group(proc)
+                    _bounded_reap(proc)
+            finally:
+                if registered and pgid is not None:
+                    _unregister_dedicated_pgid(pgid)
+
+
 def _write_prompt_file(content: str) -> pathlib.Path:
     fd, name = tempfile.mkstemp(prefix="v23-grok-prompt-", suffix=".txt", text=True)
     path = pathlib.Path(name)
@@ -271,17 +629,11 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             effort=args.effort,
             mode=args.mode,
         )
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=args.timeout + 30,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise BridgeError(f"grok exceeded the {args.timeout + 30}s bridge timeout") from exc
+        completed = _supervised_run(
+            command,
+            cwd,
+            timeout=_positive_timeout(getattr(args, "timeout", None)),
+        )
     finally:
         if prompt_path is not None:
             prompt_path.unlink(missing_ok=True)
@@ -350,8 +702,12 @@ def _batch_task(value: Any) -> argparse.Namespace:
         raise BridgeError(f"batch task {task_id!r} requires nonempty owned_paths")
     effort = value.get("effort", "low")
     timeout = value.get("timeout", DEFAULT_TIMEOUT_SECONDS)
-    if effort != EXECUTION_EFFORT or type(timeout) is not int or timeout <= 0:
+    if effort != EXECUTION_EFFORT:
         raise BridgeError(f"batch task {task_id!r} has invalid effort or timeout")
+    try:
+        timeout = _positive_timeout(timeout, label=f"batch task {task_id!r} timeout")
+    except BridgeError as exc:
+        raise BridgeError(f"batch task {task_id!r} has invalid effort or timeout") from exc
     return argparse.Namespace(
         cwd=value["cwd"],
         prompt=value["prompt"],
@@ -488,14 +844,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     subparsers.add_parser("doctor")
     args = parser.parse_args(argv)
-    if hasattr(args, "timeout") and args.timeout <= 0:
-        parser.error("--timeout must be positive")
+    if hasattr(args, "timeout") and args.timeout is not None and args.timeout <= 0:
+        parser.error("--timeout must be a positive integer when set")
     return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parse_args(argv)
+        if args.command in {"run", "resume", "batch"}:
+            install_termination_handlers()
         if args.command == "doctor":
             result = _doctor(args)
         elif args.command == "batch":
@@ -513,4 +871,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == CHILD_LAUNCHER_FLAG:
+        _run_child_launcher(sys.argv[2:])
+        raise SystemExit(127)
     raise SystemExit(main())

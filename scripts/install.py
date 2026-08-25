@@ -29,7 +29,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-VERSION = "23.1.1"
+VERSION = "23.2.0"
 MARKER = "CODEX-HARNESS-INFRA V23"
 PORTABLE_KIND = "PORTABLE"
 LOCAL_KIND = "LOCAL"
