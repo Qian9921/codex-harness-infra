@@ -142,7 +142,11 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("不是可选路由", installed_portable)
         self.assertNotIn("相关性判断", installed_portable)
         self.assertIn("默认自动进入 GitHub 交付", installed_portable)
-        self.assertIn("2–3 个互斥方案", installed_portable)
+        self.assertIn("2–3 个高价值、互斥", installed_portable)
+        self.assertIn("不要求另一次明确“开始”", installed_portable)
+        self.assertIn("request_user_input", installed_portable)
+        self.assertNotIn("默认直接推进任务", installed_portable)
+        self.assertNotIn("只有会实质改变结果的歧义才问用户", installed_portable)
         self.assertIn("$grok-execution", installed_portable)
         self.assertIn("reasoning effort 固定为 `low`", installed_portable)
         self.assertIn("QUOTA_EXHAUSTED", installed_portable)
@@ -150,6 +154,45 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("[[hooks.Stop]]", installer)
         self.assertNotIn("/Users/", bootstrap)
         self.assertNotIn("/home/", bootstrap)
+
+    def test_portable_participatory_questioning_contract(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        skill = (ROOT / ".agents/skills/engineering-delivery/SKILL.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        retired = (
+            "默认立即开始有效工作",
+            "只有会改变实现结果的实质性歧义才询问",
+            "Ask only when a material ambiguity",
+            "Ask before implementation only when a material ambiguity",
+            "默认直接推进任务",
+            "只有会实质改变结果的歧义才问用户",
+        )
+        for text in (agents, workflow, skill, portable):
+            for phrase in retired:
+                self.assertNotIn(phrase, text)
+        for text in (agents, portable):
+            self.assertIn("简单事实查询", text)
+            self.assertIn("request_user_input", text)
+            self.assertIn("不要求另一次明确“开始”", text)
+            self.assertIn("有界只读调查", text)
+        for text in (workflow, skill):
+            self.assertIn("fully explicit trivial operations may proceed directly", text)
+            self.assertIn("request_user_input", text)
+            self.assertIn("proceed without a separate explicit start", text)
+            self.assertIn("Bounded read-only investigation is allowed", text)
+        discuss_heading = workflow.index("## DISCUSS")
+        repo_change_heading = workflow.index("## REPO_CHANGE")
+        shared_marker = workflow.index("This contract applies to both `discuss` and `repo_change`.")
+        self.assertLess(shared_marker, discuss_heading)
+        self.assertLess(discuss_heading, repo_change_heading)
+        discuss_section = workflow[discuss_heading:repo_change_heading]
+        self.assertNotIn(
+            "inspect only what is needed and answer directly",
+            discuss_section,
+        )
+        self.assertIn("Only the simple/direct exceptions", discuss_section)
+        self.assertIn("stay read-only", discuss_section)
 
 
 if __name__ == "__main__":
