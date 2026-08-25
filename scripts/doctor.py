@@ -26,6 +26,9 @@ try:
         InstallError,
         active_global_agents,
         block_body,
+        effective_global_instruction,
+        global_override_path,
+        nonempty_instruction_file,
         read_toml,
     )
     from scripts.task_bootstrap import ToolResult, probe_tools
@@ -37,6 +40,9 @@ except ModuleNotFoundError:  # Support the documented `python scripts/doctor.py`
         InstallError,
         active_global_agents,
         block_body,
+        effective_global_instruction,
+        global_override_path,
+        nonempty_instruction_file,
         read_toml,
     )
     from task_bootstrap import ToolResult, probe_tools
@@ -172,6 +178,13 @@ def doctor(
     checks: list[dict[str, object]] = []
     codex_home = codex_home.resolve()
     agents_path = active_global_agents(codex_home)
+    override_path = global_override_path(codex_home)
+    canonical = agents_path == (codex_home / "AGENTS.md")
+    checks.append(_result("global_agents_canonical", canonical, str(agents_path)))
+    override_absent = not nonempty_instruction_file(override_path) and not (
+        override_path.is_symlink() or (override_path.exists() and not override_path.is_file())
+    )
+    checks.append(_result("global_override_absent", override_absent, str(override_path)))
     global_text = agents_path.read_text() if agents_path.exists() else ""
     for kind in (PORTABLE_KIND, LOCAL_KIND):
         try:
@@ -308,7 +321,7 @@ def doctor(
             )
     return {
         "ok": all(bool(check["ok"]) for check in checks),
-        "active_global_instruction": str(agents_path),
+        "active_global_instruction": str(effective_global_instruction(codex_home)),
         "project_instruction_candidates": _agent_chain(project),
         "primary_profile_start": "codex --profile v23-primary",
         "checks": checks,
