@@ -15,7 +15,13 @@ from scripts.doctor import doctor
 from scripts.install import install
 from scripts.task_bootstrap import (
     CODEGRAPH_BEGIN,
+    CODEGRAPH_TIMEOUT_SECONDS,
+    GIT_DISCOVERY_TIMEOUT_SECONDS,
+    HOOK_TIMEOUT_SECONDS,
+    LIVE_PROBE_TIMEOUT_SECONDS,
     LIVE_STATE_CONTEXT_CAP,
+    RTK_TIMEOUT_SECONDS,
+    SEMBLE_TIMEOUT_SECONDS,
     LiveField,
     ToolResult,
     _is_current_codex_executable,
@@ -186,7 +192,32 @@ class TaskBootstrapTests(unittest.TestCase):
             commands = [command for command, _ in runner.calls]
             self.assertTrue(any(command[0] == tools["semble"] for command in commands))
             self.assertTrue(any(command[0] == tools["rtk"] for command in commands))
-            self.assertLessEqual(max(runner.timeouts), 14)
+            codegraph_timeouts = [
+                timeout
+                for command, timeout in zip(commands, runner.timeouts, strict=True)
+                if command[0] == tools["codegraph"]
+            ]
+            self.assertTrue(codegraph_timeouts)
+            self.assertLessEqual(max(codegraph_timeouts), CODEGRAPH_TIMEOUT_SECONDS)
+            semble_timeouts = [
+                timeout
+                for command, timeout in zip(commands, runner.timeouts, strict=True)
+                if command[0] == tools["semble"]
+            ]
+            self.assertEqual(semble_timeouts, [SEMBLE_TIMEOUT_SECONDS])
+
+    def test_hook_timeout_budget_covers_measured_semble_and_daemon_version(self) -> None:
+        worst_case = (
+            GIT_DISCOVERY_TIMEOUT_SECONDS * 2
+            + CODEGRAPH_TIMEOUT_SECONDS * 4
+            + SEMBLE_TIMEOUT_SECONDS
+            + RTK_TIMEOUT_SECONDS
+            + LIVE_PROBE_TIMEOUT_SECONDS
+        )
+        self.assertGreaterEqual(SEMBLE_TIMEOUT_SECONDS, 36)
+        self.assertGreaterEqual(LIVE_PROBE_TIMEOUT_SECONDS, 12)
+        self.assertLessEqual(worst_case, HOOK_TIMEOUT_SECONDS)
+        self.assertGreaterEqual(HOOK_TIMEOUT_SECONDS, 130)
 
     def test_live_state_uses_current_install_json_not_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

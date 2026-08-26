@@ -24,7 +24,10 @@ source graph to initialize.
 To avoid turning task startup into a full-workspace indexing job, the mandatory
 Semble call searches the small V23-owned bootstrap source with the submitted
 prompt. It is a real semantic search and health check, not a substitute for a
-task-scoped search. Once the task's source scope is known, use Semble again on
+task-scoped search. Its Hook timeout is 36 seconds so a ~29-second owned-scope
+search is not reported as a false required-tool failure. The live runtime-state
+probe that runs `codex app-server daemon version` is budgeted 12 seconds so a
+~9-second JSON response is not reported as a false CLI/app-server timeout. Once the task's source scope is known, use Semble again on
 that scope when it changes the decision. Normal repository tools such as `rg`,
 `git`, and the project's own test commands remain available for the actual
 task.

@@ -120,6 +120,9 @@ instruction = "Local-only opening."
             self.assertIn("--codex-home", config_text)
             self.assertIn("--state-dir", config_text)
             self.assertIn(str(state_dir), config_text)
+            from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
+
+            self.assertIn(f"timeout = {HOOK_TIMEOUT_SECONDS}", config_text)
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
             self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())

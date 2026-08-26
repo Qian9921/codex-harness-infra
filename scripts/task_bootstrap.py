@@ -27,13 +27,22 @@ from pathlib import Path
 CODEGRAPH_BEGIN = "# BEGIN CODEX-HARNESS-INFRA V23 CODEGRAPH"
 CODEGRAPH_END = "# END CODEX-HARNESS-INFRA V23 CODEGRAPH"
 REQUIRED_TOOLS = ("codegraph", "semble", "rtk")
-# Keep the worst-case synchronous sequence below the 90-second native Hook
-# timeout: Git discovery 4 + 4, CodeGraph 14 * 4, Semble 12, RTK 8, live JSON 1 = 85.
+# Keep the worst-case synchronous sequence inside the native Hook timeout.
+# Measured floors: Semble search ~29.01s, `codex app-server daemon version` ~9.14s.
 GIT_DISCOVERY_TIMEOUT_SECONDS = 4
 CODEGRAPH_TIMEOUT_SECONDS = 14
-SEMBLE_TIMEOUT_SECONDS = 12
+SEMBLE_TIMEOUT_SECONDS = 36
 RTK_TIMEOUT_SECONDS = 8
-LIVE_PROBE_TIMEOUT_SECONDS = 1
+LIVE_PROBE_TIMEOUT_SECONDS = 12
+HOOK_TIMEOUT_OVERHEAD_SECONDS = 10
+HOOK_TIMEOUT_SECONDS = (
+    GIT_DISCOVERY_TIMEOUT_SECONDS * 2
+    + CODEGRAPH_TIMEOUT_SECONDS * 4
+    + SEMBLE_TIMEOUT_SECONDS
+    + RTK_TIMEOUT_SECONDS
+    + LIVE_PROBE_TIMEOUT_SECONDS
+    + HOOK_TIMEOUT_OVERHEAD_SECONDS
+)
 LIVE_STATE_CONTEXT_CAP = 1600
 HOOK_CONTEXT_CAP = 2500
 CONTROL_SOCKET_RELATIVE = "app-server-control/app-server-control.sock"
