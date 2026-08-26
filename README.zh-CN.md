@@ -42,7 +42,7 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 ## 安装边界
 
-安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于每个新任务实际检查并使用 CodeGraph、Semble 和 RTK；不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
+安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于每个新任务实际检查并使用 CodeGraph、Semble 和 RTK，并注入一份有界的当前运行时状态（来自 `install.json` 与现场 daemon 探针，而不是任务记忆）。不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
 
 ## 本机启用
 

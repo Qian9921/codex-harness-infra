@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from scripts.evaluate import Scenario, load_scenarios, main, run_offline
+from scripts.evaluate import Scenario, derive_state_dir, load_scenarios, main, run_live, run_offline
 
 
 def run_generated_case(name: str, method: object) -> dict[str, object]:
@@ -63,6 +66,44 @@ class EvaluatorRunnerTests(unittest.TestCase):
                 load_scenarios(suite)
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(("--suite", str(suite))), 2)
+
+    def test_live_derives_and_passes_explicit_state_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory) / "codex"
+            hook = home / "harness/v23/task_bootstrap.py"
+            hook.parent.mkdir(parents=True)
+            hook.write_text("print('hook')\n", encoding="utf-8")
+            local = Path(directory) / "local.toml"
+            local.write_text("[tools]\n", encoding="utf-8")
+            explicit = Path(directory) / "state"
+            self.assertEqual(derive_state_dir(home, None), home / "harness/v23-state")
+            self.assertEqual(derive_state_dir(home, explicit), explicit)
+            observed: dict[str, tuple[str, ...]] = {}
+
+            def fake_run(command, **_kwargs):
+                observed["command"] = tuple(str(part) for part in command)
+                payload = {
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": "CodeGraph=ready Semble=ready RTK=ready",
+                    }
+                }
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+            with (
+                mock.patch("scripts.evaluate.subprocess.run", side_effect=fake_run),
+                mock.patch("scripts.doctor.doctor", return_value={"ok": True}),
+            ):
+                result = run_live(home, local, explicit)
+            command = observed["command"]
+            self.assertEqual(result["status"], "PASS")
+            self.assertIn(str(hook), command)
+            self.assertIn("--local-config", command)
+            self.assertIn(str(local), command)
+            self.assertIn("--codex-home", command)
+            self.assertIn(str(home), command)
+            self.assertIn("--state-dir", command)
+            self.assertIn(str(explicit), command)
 
 
 if __name__ == "__main__":

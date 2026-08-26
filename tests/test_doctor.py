@@ -78,6 +78,21 @@ rtk = "rtk"
             self.assertTrue(checks["tool_semble"]["ok"])
             self.assertTrue(checks["tool_rtk"]["ok"])
             self.assertEqual(report["project_instruction_candidates"], [str(ROOT / "AGENTS.md")])
+            self.assertIn("install.json", report["live_runtime_authority"])
+            self.assertIn("historical only", report["live_runtime_authority"])
+
+            skipped = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+                tool_probe=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("Doctor must not re-enter full tool bootstrap")
+                ),
+            )
+            skipped_names = {check["name"] for check in skipped["checks"]}
+            self.assertNotIn("tool_codegraph", skipped_names)
             self.assertEqual(report["primary_profile_start"], "codex --profile v23-primary")
 
             (codex_home / "AGENTS.override.md").write_text("leftover override\n", encoding="utf-8")

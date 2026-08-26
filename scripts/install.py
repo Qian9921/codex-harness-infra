@@ -541,11 +541,26 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     ]
 
 
-def _config_block(runtime_python: Path, bootstrap_path: Path, local_config: Path) -> str:
+def _config_block(
+    runtime_python: Path,
+    bootstrap_path: Path,
+    local_config: Path,
+    codex_home: Path,
+    state_dir: Path,
+) -> str:
     """Render the one native V23 prompt hook and agent registrations."""
     command = " ".join(
         shlex.quote(str(part))
-        for part in (runtime_python, bootstrap_path, "--local-config", local_config)
+        for part in (
+            runtime_python,
+            bootstrap_path,
+            "--local-config",
+            local_config,
+            "--codex-home",
+            codex_home,
+            "--state-dir",
+            state_dir,
+        )
     )
     return f"""[agents.\"v23_executor\"]
 description = \"V23 quota-exhaustion-only native execution fallback.\"
@@ -562,7 +577,7 @@ type = \"command\"
 command = {json.dumps(command)}
 timeout = 90
 statusMessage = \"Running required V23 tool bootstrap\"
-additionalContextLimit = 1000"""
+additionalContextLimit = 2500"""
 
 
 def _prepare_state_dir(state_dir: Path) -> None:
@@ -605,6 +620,24 @@ def _validate_agent_content(content: str, name: str, model: str, effort: str) ->
         raise InstallError(f"rendered {name} agent does not match local configuration")
 
 
+def _source_commit(repo_root: Path) -> str | None:
+    """Record the installing checkout HEAD when git is available."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=4,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    sha = completed.stdout.strip()
+    if completed.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return None
+    return sha
+
+
 def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Path) -> None:
     """Install V23 into an empty or previously V23-managed local area."""
     repo_root, codex_home = repo_root.resolve(), codex_home.resolve()
@@ -635,7 +668,13 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     block_body(config_text, CONFIG_KIND)
     assets = _assets(repo_root, codex_home, config)
     bootstrap_path = codex_home / "harness/v23/task_bootstrap.py"
-    config_block = _config_block(runtime_python, bootstrap_path, local_config.resolve())
+    config_block = _config_block(
+        runtime_python,
+        bootstrap_path,
+        local_config.resolve(),
+        codex_home,
+        state_dir,
+    )
     old_assets = _old_assets(manifest)
     for asset in assets:
         _check_asset_parents(codex_home, asset)
@@ -669,6 +708,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
             "portable_digest": sha256_bytes(portable.encode()),
             "local_digest": sha256_bytes(local.encode()),
             "config_digest": sha256_bytes(config_block.encode()),
+            "source_commit": _source_commit(repo_root),
             "assets": [
                 {"path": str(asset.path), "digest": digest_path(asset.path), "kind": asset.kind}
                 for asset in assets

@@ -42,7 +42,7 @@ Every new commit changes the review target. Merge requires a valid approval for 
 
 ## Installation boundary
 
-The installer changes only explicitly owned files and marked blocks. It preserves unrelated personal configuration, tools, credentials, and user-authored rules. An unmarked file containing user content is not overwritten. It installs exactly one UserPromptSubmit hook because this V23 requires CodeGraph, Semble, and RTK to be health-checked and used for every new task; it installs no Stop hook, background service, daemon, or project-tracked index. Uninstallation removes only content owned by this project.
+The installer changes only explicitly owned files and marked blocks. It preserves unrelated personal configuration, tools, credentials, and user-authored rules. An unmarked file containing user content is not overwritten. It installs exactly one UserPromptSubmit hook because this V23 requires CodeGraph, Semble, and RTK to be health-checked and used for every new task, and because each new task must see a bounded live runtime-state block (install manifest, CLI/app-server probes, and Doctor summary). Live probes of `install.json` and the running daemon are authoritative; memory of earlier tasks is historical only. It installs no Stop hook, background service, daemon, or project-tracked index. Uninstallation removes only content owned by this project.
 
 ## Local activation
 

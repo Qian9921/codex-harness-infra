@@ -20,7 +20,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Small helpers and one native task hook
 
-`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, the required three-tool bootstrap, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that calls the installed bootstrap script. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
+`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, the required three-tool bootstrap plus a bounded live runtime-state block, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that calls the installed bootstrap script. Live runtime state is collected from `${CODEX_HOME}/harness/v23-state/install.json` and daemon/CLI probes; prior-task memory is historical only. Doctor summarizes the live installation and does not re-enter the full task hook. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
 
 ## Work and capability
 

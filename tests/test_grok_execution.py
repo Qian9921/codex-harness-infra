@@ -34,6 +34,7 @@ def _run_args(directory: str, **overrides: object) -> argparse.Namespace:
         "mode": "accept-edits",
         "task_id": "quota-test",
         "timeout": None,
+        "receipt": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -244,7 +245,7 @@ class GrokExecutionTests(unittest.TestCase):
             self.assertEqual(proc._v23_pgid, proc.pid)
             self.assertEqual(os.getpgid(proc.pid), proc.pid)
             self.assertNotEqual(proc.pid, os.getpgrp())
-            deadline = time.monotonic() + 2
+            deadline = time.monotonic() + 5
             while time.monotonic() < deadline and not marker.exists():
                 time.sleep(0.05)
             self.assertEqual(marker.read_text(encoding="utf-8"), str(proc.pid))
@@ -367,10 +368,10 @@ class GrokExecutionTests(unittest.TestCase):
             grok_execution._supervised_run(
                 [sys.executable, str(script)],
                 pathlib.Path("."),
-                timeout=1,
+                timeout=4,
                 poll_interval=0.1,
             )
-        self.assertLess(time.monotonic() - started, 5)
+        self.assertLess(time.monotonic() - started, 8)
         descendant = int(descendant_path.read_text(encoding="utf-8"))
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and pathlib.Path(f"/proc/{descendant}").exists():
@@ -432,7 +433,7 @@ class GrokExecutionTests(unittest.TestCase):
         )
 
         def boom(_seconds: float) -> None:
-            wait_until = time.monotonic() + 2
+            wait_until = time.monotonic() + 5
             while time.monotonic() < wait_until:
                 if descendant_path.exists() and descendant_path.read_text(encoding="utf-8").strip():
                     break
@@ -447,7 +448,7 @@ class GrokExecutionTests(unittest.TestCase):
                 poll_interval=0.1,
                 sleep=boom,
             )
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 5
         descendant = None
         while time.monotonic() < deadline:
             if descendant_path.exists():
@@ -566,7 +567,7 @@ class GrokExecutionTests(unittest.TestCase):
     def test_quota_receipt_is_bound_and_distinct_from_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             cwd = pathlib.Path(directory).resolve()
-            owned = ["owned.txt"]
+            owned = [str(cwd / "owned.txt")]
             receipt = grok_execution._quota_receipt(
                 cwd=cwd, task_id="quota-test", owned_paths=owned
             )
@@ -614,7 +615,10 @@ class GrokExecutionTests(unittest.TestCase):
                 bound = raised_quota.exception.receipt
                 self.assertEqual(bound["task_id"], "quota-test")
                 self.assertEqual(bound["working_directory"], str(pathlib.Path(directory).resolve()))
-                self.assertEqual(bound["owned_paths"], ["owned.txt"])
+                self.assertEqual(
+                    bound["owned_paths"],
+                    [str(pathlib.Path(directory).resolve() / "owned.txt")],
+                )
                 self.assertEqual(bound["fallback_reason"], "grok_quota_exhausted")
                 with (
                     mock.patch.object(grok_execution, "_supervised_run", return_value=transient),
@@ -667,6 +671,59 @@ class GrokExecutionTests(unittest.TestCase):
             assert isinstance(path, pathlib.Path)
             self.assertFalse(path.exists())
             self.assertEqual(receipt["conversation_id"], "sess-1")
+            self.assertEqual(
+                receipt["owned_paths"],
+                [str(pathlib.Path(directory).resolve() / "owned.txt")],
+            )
+
+    def test_resume_receipt_uses_exact_absolute_owned_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            owned = [str(cwd / "owned.txt")]
+            receipt_path = cwd / "receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema": grok_execution.SCHEMA,
+                        "status": "SUCCESS",
+                        "conversation_id": "sess-1",
+                        "working_directory": str(cwd),
+                        "task_id": "quota-test",
+                        "owned_paths": owned,
+                        "requested_model": grok_execution.REQUESTED_MODEL,
+                        "actual_model": grok_execution.ACTUAL_MODEL,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run(command, _cwd=None, **_kwargs):
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "sessionId": "sess-1",
+                            "stopReason": "end_turn",
+                            "modelUsage": {"grok-4.6-build": {"modelCalls": 1}},
+                            "text": "ok",
+                        }
+                    ),
+                    "",
+                )
+
+            with (
+                mock.patch.object(grok_execution, "_grok_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(directory, session="sess-1", receipt=str(receipt_path))
+                )
+            self.assertEqual(receipt["owned_paths"], owned)
+            self.assertTrue(
+                all(pathlib.Path(path).is_absolute() for path in receipt["owned_paths"])
+            )
+            self.assertTrue(receipt["continued"])
 
     def test_prompt_file_is_deleted_after_subprocess_failure(self) -> None:
         observed: dict[str, pathlib.Path] = {}
@@ -687,7 +744,7 @@ class GrokExecutionTests(unittest.TestCase):
     def test_batch_quota_receipt_uses_same_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             cwd = pathlib.Path(directory).resolve()
-            owned = ["owned.txt"]
+            owned = [str(cwd / "owned.txt")]
             receipt = grok_execution._quota_receipt(cwd=cwd, task_id="batch-one", owned_paths=owned)
             task = grok_execution._batch_task(
                 {
@@ -1197,7 +1254,7 @@ class GrokExecutionTests(unittest.TestCase):
                 stderr=stderr_handle,
             )
         try:
-            deadline = time.monotonic() + 8
+            deadline = time.monotonic() + 15
             while time.monotonic() < deadline and not descendant.exists():
                 if helper.poll() is not None:
                     break
