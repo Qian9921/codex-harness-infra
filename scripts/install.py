@@ -29,6 +29,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
+except ModuleNotFoundError:  # Support the documented direct script entrypoint.
+    from task_bootstrap import HOOK_TIMEOUT_SECONDS
+
 VERSION = "23.2.0"
 MARKER = "CODEX-HARNESS-INFRA V23"
 PORTABLE_KIND = "PORTABLE"
@@ -575,7 +580,7 @@ config_file = \"agents/v23-reviewer.toml\"
 [[hooks.UserPromptSubmit.hooks]]
 type = \"command\"
 command = {json.dumps(command)}
-timeout = 90
+timeout = {HOOK_TIMEOUT_SECONDS}
 statusMessage = \"Running required V23 tool bootstrap\"
 additionalContextLimit = 2500"""
 
