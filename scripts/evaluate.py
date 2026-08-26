@@ -178,15 +178,35 @@ def _file_identity(path: Path) -> dict[str, str]:
     return {"path": str(path.resolve()), "sha256": hashlib.sha256(content).hexdigest()}
 
 
-def run_live(codex_home: Path, local_config: Path) -> dict[str, object]:
+def derive_state_dir(codex_home: Path, state_dir: Path | None) -> Path:
+    """Use an explicit state-dir, otherwise the V23 install path under Codex home."""
+    if state_dir is not None:
+        return state_dir.expanduser()
+    return codex_home.expanduser() / "harness/v23-state"
+
+
+def run_live(
+    codex_home: Path, local_config: Path, state_dir: Path | None = None
+) -> dict[str, object]:
     """Exercise the installed Hook and Doctor locally without GitHub writes."""
     from scripts.doctor import doctor
 
-    installed_hook = codex_home / "harness/v23/task_bootstrap.py"
+    resolved_home = codex_home.expanduser()
+    resolved_state = derive_state_dir(resolved_home, state_dir)
+    installed_hook = resolved_home / "harness/v23/task_bootstrap.py"
     try:
         hook_identity = _file_identity(installed_hook)
         hook = subprocess.run(
-            (sys.executable, str(installed_hook), "--local-config", str(local_config)),
+            (
+                sys.executable,
+                str(installed_hook),
+                "--local-config",
+                str(local_config),
+                "--codex-home",
+                str(resolved_home),
+                "--state-dir",
+                str(resolved_state),
+            ),
             input=json.dumps({"cwd": str(ROOT), "prompt": "V23 live evaluation."}),
             text=True,
             capture_output=True,
@@ -200,7 +220,7 @@ def run_live(codex_home: Path, local_config: Path) -> dict[str, object]:
         context = hook_payload["hookSpecificOutput"]["additionalContext"]
     except (KeyError, TypeError, json.JSONDecodeError):
         context = "invalid Hook response"
-    doctor_report = doctor(codex_home, local_config, ROOT, check_github=False)
+    doctor_report = doctor(resolved_home, local_config, ROOT, check_github=False)
     ready = all(f"{tool}=ready" in context for tool in ("CodeGraph", "Semble", "RTK"))
     return {
         "name": "installed_hook_and_doctor",
@@ -219,6 +239,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--live", action="store_true", help="also probe the installed local Hook and Doctor"
     )
     parser.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        help="V23 install.json directory; defaults to <codex-home>/harness/v23-state",
+    )
     parser.add_argument(
         "--local-config", type=Path, default=Path.home() / ".config/codex-harness/local.toml"
     )
@@ -250,7 +275,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         "unobserved_claims": {"total": len(UNOBSERVED_METRICS), "claims": list(UNOBSERVED_METRICS)},
     }
     if args.live:
-        live = run_live(args.codex_home, args.local_config)
+        live = run_live(args.codex_home, args.local_config, args.state_dir)
         report["live"] = live
         report["ok"] = bool(report["ok"] and live["status"] == "PASS")
     print(json.dumps(report, ensure_ascii=False, indent=2))

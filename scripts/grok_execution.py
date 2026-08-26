@@ -157,7 +157,7 @@ def _owned_paths(cwd: pathlib.Path, values: Sequence[str]) -> list[str]:
         normalized = relative.as_posix()
         if normalized in {"", "."}:
             raise BridgeError("owned path must be narrower than the working directory")
-        owned.append(normalized)
+        owned.append(str(candidate))
     if not owned:
         raise BridgeError("at least one owned-path is required")
     if len(owned) != len(set(owned)):
@@ -725,8 +725,8 @@ def _assert_exclusive(tasks: Sequence[argparse.Namespace]) -> None:
     claims: list[tuple[pathlib.Path, pathlib.Path, str]] = []
     for task in tasks:
         cwd = _directory(task.cwd)
-        for relative in _owned_paths(cwd, task.owned_path):
-            claim = (cwd / relative).resolve()
+        for owned_path in _owned_paths(cwd, task.owned_path):
+            claim = pathlib.Path(owned_path)
             for _other_cwd, other_claim, other_id in claims:
                 overlaps = (
                     claim == other_claim

@@ -3,7 +3,9 @@
 V23 runs one small, real operation through CodeGraph, Semble, and RTK when each
 new user task is submitted. This is an explicit local operating requirement,
 not a generic recommendation. The native UserPromptSubmit hook supplies the
-bootstrap; it uses no Stop hook, scheduler, daemon, or task database.
+bootstrap and a bounded live runtime-state block sourced from the install
+manifest and live probes; it uses no Stop hook, scheduler, or task database.
+Memory of earlier tasks is not treated as current runtime authority.
 
 | Situation | Preferred tool |
 | --- | --- |
