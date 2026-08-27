@@ -144,11 +144,11 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("不是可选路由", installed_portable)
         self.assertNotIn("相关性判断", installed_portable)
         self.assertIn("默认自动进入 GitHub 交付", installed_portable)
-        self.assertIn("2–3 个高价值、互斥", installed_portable)
+        self.assertIn("意图审查", installed_portable)
         self.assertIn("不要求另一次明确“开始”", installed_portable)
         self.assertIn("request_user_input", installed_portable)
         self.assertNotIn("默认直接推进任务", installed_portable)
-        self.assertNotIn("只有会实质改变结果的歧义才问用户", installed_portable)
+        self.assertIn("无法安全发现且会实质改变结果", installed_portable)
         self.assertIn("$grok-execution", installed_portable)
         self.assertIn("reasoning effort 固定为 `low`", installed_portable)
         self.assertIn("QUOTA_EXHAUSTED", installed_portable)
@@ -173,6 +173,9 @@ class RepositoryContractTests(unittest.TestCase):
         for text in (agents, workflow, skill, portable):
             for phrase in retired:
                 self.assertNotIn(phrase, text)
+            self.assertIn("counterevidence" if text in (workflow, skill) else "反证", text)
+            self.assertIn("materially changes" if text in (workflow, skill) else "实质改变", text)
+            self.assertIn("Disagree explicitly" if text in (workflow, skill) else "明确反对", text)
         for text in (agents, portable):
             self.assertIn("简单事实查询", text)
             self.assertIn("request_user_input", text)
@@ -182,7 +185,7 @@ class RepositoryContractTests(unittest.TestCase):
             self.assertIn("fully explicit trivial operations may proceed directly", text)
             self.assertIn("request_user_input", text)
             self.assertIn("proceed without a separate explicit start", text)
-            self.assertIn("Bounded read-only investigation is allowed", text)
+            self.assertIn("bounded read-only investigation is allowed", text.lower())
         discuss_heading = workflow.index("## DISCUSS")
         repo_change_heading = workflow.index("## REPO_CHANGE")
         shared_marker = workflow.index("This contract applies to both `discuss` and `repo_change`.")
@@ -195,6 +198,8 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertIn("Only the simple/direct exceptions", discuss_section)
         self.assertIn("stay read-only", discuss_section)
+        for text in (agents, workflow, skill, portable):
+            self.assertIn("retire" if text in (workflow, skill) else "退休", text)
 
     def test_empty_structured_answers_pause_without_mutation_and_re_present(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
