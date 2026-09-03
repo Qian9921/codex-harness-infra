@@ -529,6 +529,7 @@ def _supervised_run(
     pgid: int | None = None
     registered = False
     completed: subprocess.CompletedProcess[str] | None = None
+    group_stopped = False
     try:
         with _REGISTRY_LOCK:
             if _TERMINATING:
@@ -558,10 +559,21 @@ def _supervised_run(
                 code = proc.poll()
                 if code is not None:
                     stdout, stderr = _stop_group_and_reap(proc)
+                    group_stopped = True
                     completed = subprocess.CompletedProcess(list(command), code, stdout, stderr)
                     return completed
                 if is_zombie(proc):
-                    raise BridgeError("grok child process became a zombie") from None
+                    # The child can exit between the poll above and the /proc
+                    # state read in is_zombie(). Stop the still-verifiable
+                    # dedicated group before communicate() reaps its leader,
+                    # then preserve the direct child's real exit result.
+                    stdout, stderr = _stop_group_and_reap(proc)
+                    group_stopped = True
+                    code = proc.returncode
+                    if code is None:
+                        raise BridgeError("grok zombie child could not be reaped") from None
+                    completed = subprocess.CompletedProcess(list(command), code, stdout, stderr)
+                    return completed
                 if not is_alive(proc):
                     raise BridgeError("grok child process died before returning a result") from None
                 sleep(0)
@@ -575,9 +587,13 @@ def _supervised_run(
         if proc is not None:
             try:
                 if completed is None:
-                    _stop_group_and_reap(proc)
+                    if group_stopped:
+                        _bounded_reap(proc)
+                    else:
+                        _stop_group_and_reap(proc)
                 else:
-                    _terminate_dedicated_group(proc)
+                    if not group_stopped:
+                        _terminate_dedicated_group(proc)
                     _bounded_reap(proc)
             finally:
                 if registered and pgid is not None:

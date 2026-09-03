@@ -142,6 +142,7 @@ class GrokExecutionTests(unittest.TestCase):
                 self.pid = 424242
                 self._v23_pgid = 424242
                 self.killed = False
+                self.kill_calls = 0
                 self.returncode: int | None = None
 
             def poll(self) -> int | None:
@@ -149,11 +150,15 @@ class GrokExecutionTests(unittest.TestCase):
 
             def kill(self) -> None:
                 self.killed = True
+                self.kill_calls += 1
 
             def communicate(self, timeout: float | None = None) -> tuple[str, str]:
                 if self.mode == "ok":
                     self.returncode = 0
                     return "out", "err"
+                if self.mode == "zombie" and self.killed:
+                    self.returncode = 7
+                    return "zombie-out", "zombie-err"
                 if self.killed:
                     self.returncode = -9
                     return "", ""
@@ -172,17 +177,23 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout, "out")
 
-        with self.assertRaisesRegex(grok_execution.BridgeError, "zombie"):
-            grok_execution._supervised_run(
-                ["grok"],
-                pathlib.Path("."),
-                timeout=None,
-                spawn=lambda _command, _cwd: FakeProc("zombie"),
-                is_alive=lambda _proc: True,
-                is_zombie=lambda _proc: True,
-                sleep=lambda _seconds: None,
-                clock=lambda: 0.0,
-            )
+        zombie = FakeProc("zombie")
+        completed = grok_execution._supervised_run(
+            ["grok"],
+            pathlib.Path("."),
+            timeout=None,
+            spawn=lambda _command, _cwd: zombie,
+            is_alive=lambda _proc: True,
+            is_zombie=lambda _proc: True,
+            sleep=lambda _seconds: None,
+            clock=lambda: 0.0,
+        )
+        self.assertTrue(zombie.killed)
+        self.assertEqual(zombie.kill_calls, 1)
+        self.assertEqual(completed.returncode, 7)
+        self.assertEqual(completed.stdout, "zombie-out")
+        self.assertEqual(completed.stderr, "zombie-err")
+        self.assertNotIn(zombie.pid, grok_execution._REGISTERED_PGIDS)
 
         with self.assertRaisesRegex(grok_execution.BridgeError, "died"):
             grok_execution._supervised_run(
