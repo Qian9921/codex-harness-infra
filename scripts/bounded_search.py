@@ -205,11 +205,11 @@ class _SpawnCleanupToken:
         self._done = False
 
     def kill_and_drain(self) -> None:
-        if self._done:
-            return
-        self._done = True
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
         try:
+            if self._done:
+                return
+            self._done = True
             candidate = self._candidate_pgid
             if candidate > 1 and candidate not in (os.getpid(), os.getpgrp()):
                 try:

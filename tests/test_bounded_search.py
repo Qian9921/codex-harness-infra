@@ -269,6 +269,46 @@ class BoundedSearchTests(unittest.TestCase):
         self.assertEqual(result["status"], STATUS_MATCH)
         self.assertEqual(blocked_at_publish, [True])
 
+    def test_cleanup_blocks_signals_before_done_flag(self) -> None:
+        class FakeProc:
+            pid = 999_999
+            stdout = None
+            stderr = None
+
+            def __init__(self) -> None:
+                self.killed = 0
+
+            def kill(self) -> None:
+                self.killed += 1
+
+            def wait(self, timeout: float | None = None) -> int:
+                return 0
+
+        proc = FakeProc()
+        token = _SpawnCleanupToken(proc)
+        real_mask = signal.pthread_sigmask
+        blocked_before_done: list[bool] = []
+        interrupt_first_block = True
+
+        def wrapped_mask(how: int, mask: object) -> set[int]:
+            nonlocal interrupt_first_block
+            if how == signal.SIG_BLOCK:
+                blocked_before_done.append(token._done)
+                if interrupt_first_block:
+                    interrupt_first_block = False
+                    raise KeyboardInterrupt(signal.SIGTERM)
+            return real_mask(how, mask)
+
+        with mock.patch("scripts.bounded_search.signal.pthread_sigmask", wrapped_mask):
+            with self.assertRaises(KeyboardInterrupt):
+                token.kill_and_drain()
+            self.assertFalse(token._done)
+            self.assertEqual(proc.killed, 0)
+            token.kill_and_drain()
+        self.assertTrue(token._done)
+        self.assertEqual(proc.killed, 1)
+        self.assertEqual(blocked_before_done, [False, False])
+
     def test_child_unblocks_termination_signals_and_restores_sigpipe(self) -> None:
         script = (
             "import signal, sys\n"
