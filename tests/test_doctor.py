@@ -71,6 +71,8 @@ rtk = "rtk"
             self.assertTrue(checks["agent_v23_reviewer"]["ok"])
             self.assertTrue(checks["task_bootstrap_hook"]["ok"])
             self.assertTrue(checks["grok_execution_route"]["ok"])
+            self.assertTrue(checks["bounded_search"]["ok"])
+            self.assertTrue(checks["grok_process_lifecycle"]["ok"])
             detail = str(checks["grok_execution_route"]["detail"])
             self.assertIn(str(codex_home / "bin/grok-execution.py"), detail)
             self.assertIn(str(ROOT / "scripts/grok_execution.py"), detail)
@@ -148,6 +150,41 @@ rtk = "rtk"
             recovered_checks = {check["name"]: check for check in recovered["checks"]}
             self.assertTrue(recovered["ok"])
             self.assertTrue(recovered_checks["global_override_absent"]["ok"])
+
+    def test_absent_optional_tools_do_not_fail_doctor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+primary_effort = "high"
+executor = "executor-model"
+executor_effort = "low"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = "Local-only opening."
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                tool_probe=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("absent tools must not be probed")
+                ),
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(report["ok"])
+            self.assertTrue(checks["tools_config"]["ok"])
+            self.assertTrue(checks["tools_optional"]["ok"])
+            self.assertNotIn("tool_codegraph", checks)
 
 
 if __name__ == "__main__":

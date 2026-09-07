@@ -1,8 +1,9 @@
-"""Run the V23 required tool bootstrap for one submitted user prompt.
+"""Inject V23 installed instructions and live runtime checks for one prompt.
 
 The script is installed outside repositories and invoked by the sole V23
-``UserPromptSubmit`` hook. It performs one small real operation through each
-required tool, then injects a bounded live runtime-state block. Install
+``UserPromptSubmit`` hook. It injects a bounded live runtime-state block.
+CodeGraph, Semble, and RTK remain available through explicit Doctor and
+``probe_tools`` calls; they are not mandatory on every prompt. Install
 manifest and live daemon probes are authoritative; prior-task memory is
 historical only. It deliberately has no task database, Stop hook, or
 background loop.
@@ -35,14 +36,9 @@ SEMBLE_TIMEOUT_SECONDS = 36
 RTK_TIMEOUT_SECONDS = 8
 LIVE_PROBE_TIMEOUT_SECONDS = 12
 HOOK_TIMEOUT_OVERHEAD_SECONDS = 10
-HOOK_TIMEOUT_SECONDS = (
-    GIT_DISCOVERY_TIMEOUT_SECONDS * 2
-    + CODEGRAPH_TIMEOUT_SECONDS * 4
-    + SEMBLE_TIMEOUT_SECONDS
-    + RTK_TIMEOUT_SECONDS
-    + LIVE_PROBE_TIMEOUT_SECONDS
-    + HOOK_TIMEOUT_OVERHEAD_SECONDS
-)
+HOOK_TIMEOUT_SECONDS = LIVE_PROBE_TIMEOUT_SECONDS + HOOK_TIMEOUT_OVERHEAD_SECONDS
+DEFAULT_PRIMARY_EFFORT = "high"
+DEFAULT_EXECUTOR_EFFORT = "low"
 LIVE_STATE_CONTEXT_CAP = 1600
 HOOK_CONTEXT_CAP = 2500
 CONTROL_SOCKET_RELATIVE = "app-server-control/app-server-control.sock"
@@ -311,7 +307,7 @@ def probe_tools(
     runner: CommandRunner | None = None,
     initialize_codegraph: bool = True,
 ) -> list[ToolResult]:
-    """Health-check and use each required tool once for the supplied task."""
+    """Explicit Doctor/task-relevant probe of CodeGraph, Semble, and RTK."""
     runner = runner or _system_runner
     cwd = cwd.resolve()
     root = _git_root(cwd, runner)
@@ -321,13 +317,6 @@ def probe_tools(
     semble = _semble_result(_resolve_executable(tools.get("semble")), prompt, runner)
     rtk = _rtk_result(_resolve_executable(tools.get("rtk")), root, cwd, runner)
     return [codegraph, semble, rtk]
-
-
-def _load_local_config(path: Path) -> dict[str, object]:
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        raise ValueError(f"local configuration unavailable: {error}") from error
 
 
 def _privacy_text(value: str) -> str:
@@ -869,6 +858,7 @@ def local_installation_checks(
         ("engineering_delivery_skill", skill.is_file() and not skill.is_symlink(), str(skill))
     )
     grok_skill = codex_home / "skills/grok-execution/SKILL.md"
+    lifecycle = codex_home / "skills/grok-execution/references/grok-process-lifecycle.md"
     grok_bridge = codex_home / "bin/grok-execution.py"
     source = (
         source_bridge
@@ -889,6 +879,11 @@ def local_installation_checks(
             f"{grok_skill}; {installed_detail}; {source_detail}",
         )
     )
+    bounded = codex_home / "bin/bounded-search.py"
+    bounded_ok, bounded_detail = _bridge_file(bounded)
+    checks.append(("bounded_search", bounded_ok, bounded_detail))
+    life_ok, life_detail = _bridge_file(lifecycle)
+    checks.append(("grok_process_lifecycle", life_ok, life_detail))
     try:
         local = tomllib.loads(local_config.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -918,7 +913,8 @@ def local_installation_checks(
         profile_ok = bool(
             profile
             and profile.get("model") == models["primary"]
-            and profile.get("model_reasoning_effort") == models.get("primary_effort", "medium")
+            and profile.get("model_reasoning_effort")
+            == models.get("primary_effort", DEFAULT_PRIMARY_EFFORT)
             and profile.get("review_model") == models["reviewer"]
         )
         checks.append(("primary_profile", profile_ok, str(profile_path)))
@@ -928,7 +924,7 @@ def local_installation_checks(
                 "v23-executor.toml",
                 "v23_executor",
                 "executor",
-                models.get("executor_effort", "medium"),
+                models.get("executor_effort", DEFAULT_EXECUTOR_EFFORT),
             ),
             ("v23-reviewer.toml", "v23_reviewer", "reviewer", "high"),
         ):
@@ -941,17 +937,19 @@ def local_installation_checks(
             )
             checks.append((f"agent_{name}", ok and registration_ok, detail))
     tools = local.get("tools", {})
-    if not isinstance(tools, dict):
+    if tools is None:
+        checks.append(("tools_config", True, "optional tools not configured"))
+    elif not isinstance(tools, dict):
         checks.append(("tools_config", False, "[tools] is not a TOML table"))
     else:
         missing = [name for name in REQUIRED_TOOLS if not tools.get(name)]
         checks.append(
             (
                 "tools_config",
-                not missing,
-                "all required tools configured"
+                True,
+                "all optional tools configured"
                 if not missing
-                else f"missing required tools: {', '.join(missing)}",
+                else f"optional tools absent: {', '.join(missing)}",
             )
         )
     return checks
@@ -1022,19 +1020,13 @@ def render_live_state(fields: list[LiveField], *, cap: int = LIVE_STATE_CONTEXT_
     return text
 
 
-def _hook_context(results: list[ToolResult], live_state: str = "") -> str:
-    states = "; ".join(
-        f"{result.name}=ready" if result.ok else f"{result.name}=FAILED ({result.detail})"
-        for result in results
+def _hook_context(live_state: str = "") -> str:
+    header = (
+        "V23 prompt hook injected installed instructions and live runtime checks. "
+        "CodeGraph, Semble, and RTK are task-relevant; tool failure must not block "
+        "unrelated work. Explicit Doctor probes remain available."
     )
-    if all(result.ok for result in results):
-        tools = f"V23 required tool bootstrap completed: {states}."
-    else:
-        tools = (
-            f"V23 required tool bootstrap completed with failures: {states}. "
-            "Repair the failed required tool before unrelated task work."
-        )
-    combined = f"{tools} {live_state}".strip()
+    combined = f"{header} {live_state}".strip()
     if len(combined) > HOOK_CONTEXT_CAP:
         return combined[: HOOK_CONTEXT_CAP - 15] + "...[truncated]"
     return combined
@@ -1052,13 +1044,7 @@ def run_hook(
     proc_net_unix: str | None = None,
 ) -> dict[str, object]:
     """Return the documented UserPromptSubmit hook response."""
-    try:
-        config = _load_local_config(local_config)
-        raw_tools = config.get("tools", {})
-        tools = raw_tools if isinstance(raw_tools, dict) else {}
-        results = probe_tools(cwd, prompt, tools, runner=runner)
-    except (OSError, ValueError) as error:
-        results = [ToolResult(name.title(), False, str(error)) for name in REQUIRED_TOOLS]
+    del prompt
     home = (codex_home or Path.home() / ".codex").expanduser()
     state = (state_dir or home / "harness/v23-state").expanduser()
     try:
@@ -1077,7 +1063,7 @@ def run_hook(
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": _hook_context(results, live_text),
+            "additionalContext": _hook_context(live_text),
         }
     }
 

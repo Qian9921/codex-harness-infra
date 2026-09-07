@@ -165,6 +165,17 @@ def _owned_paths(cwd: pathlib.Path, values: Sequence[str]) -> list[str]:
     return sorted(owned)
 
 
+def _codex_home() -> pathlib.Path:
+    raw = os.environ.get("CODEX_HOME")
+    if raw:
+        return pathlib.Path(raw).expanduser()
+    return pathlib.Path.home() / ".codex"
+
+
+def _bounded_search_helper() -> pathlib.Path:
+    return _codex_home() / "bin/bounded-search.py"
+
+
 def _bound_prompt(
     prompt: str,
     cwd: pathlib.Path,
@@ -172,14 +183,23 @@ def _bound_prompt(
     task_id: str,
     owned_paths: Sequence[str],
 ) -> str:
+    helper = _bounded_search_helper()
     return (
         "You are grok_execution, the preferred external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
         f"Task ID: {task_id}\n"
         "Exclusive writable paths: " + ", ".join(owned_paths) + "\n"
-        "Work only in that directory. Preserve unrelated changes, do not commit unless "
-        "explicitly authorized, run decision-changing checks, and report exact changed "
-        "paths, checks, limitations, requested model, actual model, and session ID.\n\n"
+        "Complete this bounded task, including implementation, tests, and fixes, only in "
+        "that directory. Preserve unrelated changes. Do not commit unless explicitly "
+        "authorized. Return a concise result covering changed files, behavior, evidence, "
+        "and unresolved items. The parent will run targeted independent verification "
+        "instead of duplicating the full implementation. Luna supervises lifecycle and "
+        "receipt only.\n"
+        "Recursive content search MUST use the Harness default helper (not an OS sandbox): "
+        f'python "{helper}" --root <repo-or-module> --pattern <pattern> [--path <file-or-dir>]. '
+        "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "
+        "scope and retry; never treat incomplete as no-match. Known individual-file reads "
+        "may stay direct. Do not bypass with grep or Python recursive scans.\n\n"
         "TASK\n"
         f"{prompt}"
     )

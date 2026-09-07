@@ -41,6 +41,25 @@ def _run_args(directory: str, **overrides: object) -> argparse.Namespace:
 
 
 class GrokExecutionTests(unittest.TestCase):
+    def test_bound_prompt_covers_implementation_and_concise_result(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_HOME": "/tmp/codex-home-for-prompt"}):
+            text = grok_execution._bound_prompt(
+                "do work",
+                pathlib.Path("/workspace"),
+                task_id="task-1",
+                owned_paths=["/workspace/owned"],
+            )
+        self.assertIn("implementation, tests, and fixes", text)
+        self.assertIn("changed files, behavior, evidence", text)
+        self.assertIn("targeted independent verification", text)
+        self.assertIn("Luna supervises lifecycle", text)
+        self.assertIn("/tmp/codex-home-for-prompt/bin/bounded-search.py", text)
+        self.assertIn("Harness default helper (not an OS sandbox)", text)
+        self.assertIn("Timeout is 15 seconds", text)
+        self.assertIn("never treat incomplete as no-match", text)
+        self.assertIn("narrow the scope", text)
+        self.assertIn("TASK\ndo work", text)
+
     def test_run_and_resume_default_to_no_timeout(self) -> None:
         run_args = grok_execution.parse_args(
             ["run", "--prompt", "bounded task", "--task-id", "one", "--owned-path", "file.txt"]

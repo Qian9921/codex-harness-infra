@@ -20,6 +20,8 @@ REQUIRED_FILES = {
     ".agents/skills/engineering-delivery/SKILL.md",
     ".agents/skills/grok-execution/SKILL.md",
     "scripts/grok_execution.py",
+    "scripts/bounded_search.py",
+    ".agents/skills/grok-execution/references/grok-process-lifecycle.md",
     "scripts/install.py",
     "scripts/doctor.py",
     "scripts/github_delivery.py",
@@ -51,6 +53,13 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("Principal Engineer / Research Scientist", agents)
         self.assertIn("不靠仪式感制造正确", agents)
         self.assertIn("不靠仪式感制造正确", installed)
+        self.assertNotIn("每条面向用户的 commentary", agents)
+        self.assertNotIn("每条面向用户的 commentary", installed)
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        self.assertIn("targeted independent verification", workflow)
+        self.assertIn(
+            "bounded-search.py", (ROOT / "docs/tool-routing.md").read_text(encoding="utf-8")
+        )
         self.assertNotRegex(agents, re.compile(r"/(?:Users|home)/"))
         self.assertNotRegex(agents, re.compile(r"(?i)(?:api[_-]?key|access[_-]?token|secret)\s*="))
 
@@ -141,8 +150,9 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("CodeGraph", portable)
         self.assertIn("Semble", portable)
         self.assertIn("RTK", portable)
-        self.assertIn("不是可选路由", installed_portable)
-        self.assertNotIn("相关性判断", installed_portable)
+        self.assertNotIn("不是可选路由", installed_portable)
+        self.assertIn("按任务相关性使用", installed_portable)
+        self.assertIn("不得阻断无关任务", installed_portable)
         self.assertIn("默认自动进入 GitHub 交付", installed_portable)
         self.assertIn("意图审查", installed_portable)
         self.assertIn("不要求另一次明确“开始”", installed_portable)

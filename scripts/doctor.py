@@ -1,9 +1,10 @@
 """Report whether a V23 local installation is usable and run bounded tool probes.
 
-Doctor summarizes the live installation; it does not re-enter the full
-UserPromptSubmit ``task_bootstrap`` hook. Live runtime state for new tasks is
-collected separately from ``install.json`` and daemon probes. Memory of earlier
-tasks is historical only.
+Doctor summarizes the live installation and can probe CodeGraph, Semble, and
+RTK on request; it does not re-enter the full UserPromptSubmit hook. Live
+runtime state for new tasks is collected separately from ``install.json`` and
+daemon probes. Memory of earlier tasks is historical only. Tool probe failure
+does not rewrite the prompt hook.
 """
 
 from __future__ import annotations
@@ -109,7 +110,7 @@ def doctor(
             raw_tools = local.get("tools", {})
             tools = raw_tools if isinstance(raw_tools, dict) else {}
     missing = [name for name in ("codegraph", "semble", "rtk") if not tools.get(name)]
-    if local_ok is not None and local_ok[1] and not missing and probe_required_tools:
+    if local_ok is not None and local_ok[1] and probe_required_tools and not missing:
         try:
             tool_results = tool_probe(project, "V23 Doctor health probe.", tools)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
@@ -121,10 +122,18 @@ def doctor(
         observed_names = {result.name for result in tool_results}
         if observed_names != expected_names:
             checks.append(
-                _result("tools_behavior", False, "probe did not return all required tools")
+                _result("tools_behavior", False, "probe did not return all requested tools")
             )
         for result in tool_results:
             checks.append(_result(f"tool_{result.name.casefold()}", result.ok, result.detail))
+    elif local_ok is not None and local_ok[1] and probe_required_tools and missing:
+        checks.append(
+            _result(
+                "tools_optional",
+                True,
+                "CodeGraph/Semble/RTK absent; skipped unless explicitly configured",
+            )
+        )
     if check_github:
         if not local:
             try:

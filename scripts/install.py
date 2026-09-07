@@ -467,6 +467,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     grok_skill_source = repo_root / ".agents/skills/grok-execution"
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
+    bounded_search_source = repo_root / "scripts/bounded_search.py"
     for source in (
         primary_template,
         executor_template,
@@ -475,19 +476,20 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         grok_skill_source,
         bootstrap_source,
         grok_bridge_source,
+        bounded_search_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
     primary = render_template(
         primary_template,
         primary_model=models.get("primary", ""),
-        primary_effort=models.get("primary_effort", "medium"),
+        primary_effort=models.get("primary_effort", "high"),
         reviewer_model=models.get("reviewer", ""),
     )
     executor = render_template(
         executor_template,
         executor_model=models.get("executor", ""),
-        executor_effort=models.get("executor_effort", "medium"),
+        executor_effort=models.get("executor_effort", "low"),
     )
     reviewer = render_template(reviewer_template, reviewer_model=models.get("reviewer", ""))
     try:
@@ -496,12 +498,12 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         raise InstallError(f"invalid rendered V23 primary profile: {error}") from error
     if (
         primary_profile.get("model") != models["primary"]
-        or primary_profile.get("model_reasoning_effort") != models.get("primary_effort", "medium")
+        or primary_profile.get("model_reasoning_effort") != models.get("primary_effort", "high")
         or primary_profile.get("review_model") != models["reviewer"]
     ):
         raise InstallError("rendered V23 primary profile does not match local configuration")
     _validate_agent_content(
-        executor, "v23_executor", models["executor"], models.get("executor_effort", "medium")
+        executor, "v23_executor", models["executor"], models.get("executor_effort", "low")
     )
     _validate_agent_content(reviewer, "v23_reviewer", models["reviewer"], "high")
     return [
@@ -543,6 +545,11 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             grok_bridge_source,
             "file",
         ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/bounded-search.py"),
+            bounded_search_source,
+            "file",
+        ),
     ]
 
 
@@ -581,7 +588,7 @@ config_file = \"agents/v23-reviewer.toml\"
 type = \"command\"
 command = {json.dumps(command)}
 timeout = {HOOK_TIMEOUT_SECONDS}
-statusMessage = \"Running required V23 tool bootstrap\"
+statusMessage = \"Injecting V23 runtime checks\"
 additionalContextLimit = 2500"""
 
 

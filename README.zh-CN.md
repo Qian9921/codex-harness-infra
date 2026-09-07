@@ -42,11 +42,11 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 ## 安装边界
 
-安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于每个新任务实际检查并使用 CodeGraph、Semble 和 RTK，并注入一份有界的当前运行时状态（来自 `install.json` 与现场 daemon 探针，而不是任务记忆）。不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
+安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于注入已安装说明和有界运行时状态（来自 `install.json` 与现场 daemon 探针，而不是任务记忆）。CodeGraph、Semble、RTK 按任务相关性使用，Doctor 仍可显式探测。不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
 
 ## 本机启用
 
-将 `package/local.example.toml` 复制到仓库外的本机路径，填写模型、开场指令、GitHub、Python runtime 和三个必需工具字段，然后运行 `python scripts/install.py install --local-config <local-file>`。在 Codex 的 hook browser 中一次性 review 并 trust V23 UserPromptSubmit hook 后，用 `codex --profile v23-primary` 启动 V23 主 profile；它选择本机主模型，并把原生 `/review` 映射到本机 review 模型。V23 executor 与 reviewer 仍作为独立 custom agent 注册。
+将 `package/local.example.toml` 复制到仓库外的本机路径，填写模型、开场指令、GitHub、Python runtime 和工具字段，然后运行 `python scripts/install.py install --local-config <local-file>`。建议本机映射：primary `gpt-6-astra` high、reviewer `gpt-5.6-sol`、Luna low fallback。在 Codex 的 hook browser 中一次性 review 并 trust V23 UserPromptSubmit hook 后，用 `codex --profile v23-primary` 启动 V23 主 profile；它选择本机主模型，并把原生 `/review` 映射到本机 review 模型。V23 executor 与 reviewer 仍作为独立 custom agent 注册。
 
 ## 从这里开始
 

@@ -1,30 +1,32 @@
-# Required tool bootstrap and routing
+# Tool routing
 
-Before task work, V23's native UserPromptSubmit hook must health-check and
-actually use CodeGraph, Semble, and RTK once. This is a user-specific hard
-requirement, not general defensive process. The hook is intentionally the only
-V23 hook and is never a Stop hook.
+The native UserPromptSubmit hook injects installed instructions and live
+runtime checks. It is the only V23 hook and is never a Stop hook. CodeGraph,
+Semble, and RTK are task-relevant; explicit Doctor/`probe_tools` checks remain
+usable. A tool failure must not block unrelated work.
 
-| Need | Required tool | Use it for |
+| Need | Tool | Use it for |
 | --- | --- | --- |
-| Every new task | CodeGraph | Index status/sync plus a real file query |
-| Every new task | Semble | A bounded semantic health search using the user prompt |
-| Every new task | RTK | A compact Git workspace status or directory inspection |
-| Straightforward file or text work | `rg`, `git`, project tools | Direct local operations |
+| Task-relevant source index/query | CodeGraph | Index status/sync plus a real file query |
+| Task-relevant semantic search | Semble | Bounded search of a known repo or module |
+| Task-relevant workspace command | RTK | Compact Git status or directory inspection |
+| Local text search | installed `bin/bounded-search.py` | Exact repo, module, or file targets |
+| Straightforward file work | `git`, project tools | Direct local operations |
 | Follow-on investigation | Best-fit tool | Expand only if it changes the decision |
 
-The mandatory Semble search is deliberately scoped to V23's small bootstrap
-source. This makes every-task use reliable without indexing a potentially huge
-umbrella workspace before the task scope is known. Perform a second Semble
-search against the actual task scope when it would change the decision.
+Require an exact repository, module, or explicit file set. Locate files first.
+Do not scan `/home`, `/tmp`, umbrella worktrees, artifacts, or caches for local
+clues. Normally one single-thread recursive search at a time, 15s timeout with
+bounded kill. After timeout, narrow and report incomplete; never call timeout a
+no-match. Do not bypass with grep or Python. The Harness default for recursive content search is the installed helper
+`${CODEX_HOME:-$HOME/.codex}/bin/bounded-search.py` (not an OS sandbox), 15s
+timeout. After timeout or incomplete, narrow and retry; never treat incomplete
+as no-match. Known individual-file reads may stay direct.
 
-The CodeGraph cache is Git-local and ignored through a V23-marked
-info/exclude block; it is not committed and no daemon is started. In a non-Git
-directory, CodeGraph can only perform an executable probe because no project
-graph exists.
+The CodeGraph cache is Git-local and ignored through a V23-marked info/exclude
+block; it is not committed and no daemon is started. Create or sync the index
+only when the task needs it.
 
-If any required tool fails, repair the named tool before unrelated task work.
-Only repair V23-owned setup automatically; never silently reinstall, upgrade,
-or alter independent user tools. Tool output is evidence, not a conclusion.
-Cross-check source, build, test, or runtime results when the task depends on
-them. Never put credentials or private machine paths in PR evidence.
+Repair only V23-owned setup automatically. Tool output is evidence, not a
+conclusion. Cross-check source, build, test, or runtime results when the task
+depends on them. Never put credentials or private machine paths in PR evidence.

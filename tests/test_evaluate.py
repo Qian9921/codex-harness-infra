@@ -8,9 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.bounded_search import STATUS_NO_MATCH, STATUS_TIMEOUT, SearchError, run_search
 from scripts.github_delivery import DeliveryFlow, FlowError, GHClient, ReviewVerdict
 from scripts.install import install, uninstall
-from scripts.task_bootstrap import _semble_health_scope, probe_tools
+from scripts.task_bootstrap import _semble_health_scope, probe_tools, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -158,6 +159,39 @@ class HarnessScenarioEvals(unittest.TestCase):
             self.assertEqual([result.ok for result in results], [False, True, True])
             self.assertTrue(any(command[0] == tools["semble"] for command in runner.calls))
             self.assertTrue(any(command[0] == tools["rtk"] for command in runner.calls))
+
+    def test_hook_does_not_block_unrelated_work(self) -> None:
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            local = root / "local.toml"
+            local.write_text("[tools]\n", encoding="utf-8")
+            payload = run_hook(
+                root,
+                "Continue an unrelated task.",
+                local,
+                codex_home=root / "codex",
+                state_dir=root / "state",
+                runner=runner,
+            )
+            context = payload["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("must not block", context)
+            self.assertNotIn("Repair the failed required tool", context)
+            self.assertFalse(
+                any(command and command[0] == tools["codegraph"] for command in runner.calls)
+            )
+
+    def test_bounded_search_requires_explicit_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "module").mkdir()
+            (root / "module/app.py").write_text("unique_eval_token = True\n", encoding="utf-8")
+            matched = run_search(root=root, pattern="unique_eval_token", paths=["module"])
+            self.assertEqual(matched["status"], "match")
+            missing = run_search(root=root, pattern="no-such-eval-token", paths=["module"])
+            self.assertEqual(missing["status"], STATUS_NO_MATCH)
+            self.assertNotEqual(missing["status"], STATUS_TIMEOUT)
+            with self.assertRaises(SearchError):
+                run_search(root=Path.home(), pattern="x", paths=[])
 
     def test_semble_health_search_uses_owned_scope(self) -> None:
         directory, root, tools, runner = self.tool_environment()

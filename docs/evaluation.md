@@ -28,9 +28,10 @@ python scripts/evaluate.py --live
 ```
 
 `--live` executes the installed UserPromptSubmit Hook plus the checkout Doctor
-against the local project, checks the real CodeGraph/Semble/RTK results, and
-performs no GitHub write. It identifies the installed Hook separately from the
-checkout source. It may create only the V23-owned Git-local CodeGraph cache.
+against the local project, checks live runtime-state injection and Doctor tool
+probes, and performs no GitHub write. It identifies the installed Hook
+separately from the checkout source. Doctor may create only the V23-owned
+Git-local CodeGraph cache.
 
 For a model or Harness comparison, create a disposable repository, freeze the
 prompt, initial revision, tool availability, model/profile, and task budget;
