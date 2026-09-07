@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -10,8 +11,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.bounded_search import (
+    _TERMINATION_SIGNALS,
     DEFAULT_TIMEOUT_SECONDS,
     STATUS_ERROR,
     STATUS_INCOMPLETE,
@@ -19,8 +22,12 @@ from scripts.bounded_search import (
     STATUS_NO_MATCH,
     STATUS_TIMEOUT,
     SearchError,
+    _child_reset_inherited_signal_mask,
+    _spawn_search,
+    _SpawnCleanupToken,
     main,
     run_search,
+    terminate_group,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -210,6 +217,140 @@ class BoundedSearchTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], STATUS_ERROR)
             self.assertIn("unavailable", str(result["detail"]))
+
+    def test_direct_exit_descendant_with_redirected_pipes_is_killed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "file.txt").write_text("needle\n", encoding="utf-8")
+            pidfile = Path(directory) / "descendant.pid"
+            fake = _executable(
+                Path(directory) / "rg",
+                f"#!/bin/sh\nsleep 30 >/dev/null 2>&1 &\necho $! > '{pidfile}'\nexit 0\n",
+            )
+            result = run_search(
+                root=root,
+                pattern="needle",
+                paths=["file.txt"],
+                timeout_seconds=5,
+                rg=str(fake),
+            )
+            self.assertEqual(result["status"], STATUS_MATCH)
+            descendant = int(pidfile.read_text(encoding="utf-8").strip())
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(descendant, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail(f"descendant {descendant} still alive after match")
+
+    def test_spawn_blocks_signals_until_cleanup_ownership(self) -> None:
+        blocked_at_publish: list[bool] = []
+        real_init = _SpawnCleanupToken.__init__
+
+        def wrapped_init(self: _SpawnCleanupToken, proc: object) -> None:
+            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+            blocked_at_publish.append(set(_TERMINATION_SIGNALS) <= set(blocked))
+            real_init(self, proc)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "file.txt").write_text("needle\n", encoding="utf-8")
+            fake = _executable(Path(directory) / "rg", "#!/bin/sh\nexit 0\n")
+            with mock.patch.object(_SpawnCleanupToken, "__init__", wrapped_init):
+                result = run_search(
+                    root=root,
+                    pattern="needle",
+                    paths=["file.txt"],
+                    rg=str(fake),
+                )
+        self.assertEqual(result["status"], STATUS_MATCH)
+        self.assertEqual(blocked_at_publish, [True])
+
+    def test_child_unblocks_termination_signals_and_restores_sigpipe(self) -> None:
+        script = (
+            "import signal, sys\n"
+            "blocked = signal.pthread_sigmask(signal.SIG_BLOCK, [])\n"
+            "sys.stdout.write(' '.join(str(item) for item in sorted(blocked)))\n"
+        )
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, _TERMINATION_SIGNALS)
+        try:
+            proc = _spawn_search([sys.executable, "-c", script], Path("."))
+            try:
+                stdout, _stderr = proc.communicate(timeout=5)
+            finally:
+                terminate_group(proc)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        blocked = {int(item) for item in stdout.decode("utf-8", "replace").split() if item}
+        self.assertTrue(set(_TERMINATION_SIGNALS).isdisjoint(blocked), msg=stdout)
+
+        names = [
+            name for name in ("SIGPIPE", "SIGXFSZ") if isinstance(getattr(signal, name, None), int)
+        ]
+        self.assertIn("SIGPIPE", names)
+        sleep_bin = shutil.which("sleep")
+        self.assertIsNotNone(sleep_bin)
+        assert sleep_bin is not None
+        ignored_handlers = {name: signal.getsignal(getattr(signal, name)) for name in names}
+        try:
+            for name in names:
+                signal.signal(getattr(signal, name), signal.SIG_IGN)
+            proc = _spawn_search([sleep_bin, "5"], Path("."))
+            try:
+                deadline = time.monotonic() + 5
+                status_text = ""
+                while time.monotonic() < deadline:
+                    path = Path(f"/proc/{proc.pid}/status")
+                    try:
+                        status_text = path.read_text(encoding="utf-8")
+                    except OSError:
+                        time.sleep(0.01)
+                        continue
+                    fields = {}
+                    for line in status_text.splitlines():
+                        if ":" in line:
+                            key, value = line.split(":", 1)
+                            fields[key] = value.strip()
+                    if fields.get("Name") == "sleep" and "SigIgn" in fields:
+                        ignored = int(fields["SigIgn"], 16)
+                        for name in names:
+                            signum = getattr(signal, name)
+                            self.assertEqual(ignored & (1 << (signum - 1)), 0, msg=name)
+                        break
+                else:
+                    self.fail(f"did not observe exec of sleep: {status_text}")
+            finally:
+                terminate_group(proc)
+        finally:
+            for name, handler in ignored_handlers.items():
+                signal.signal(getattr(signal, name), handler)
+
+        seen: list[int] = []
+
+        class MissingXfsz:
+            SIGTERM = signal.SIGTERM
+            SIGHUP = signal.SIGHUP
+            SIGINT = signal.SIGINT
+            SIGPIPE = signal.SIGPIPE
+            SIG_DFL = signal.SIG_DFL
+            SIG_UNBLOCK = signal.SIG_UNBLOCK
+
+            @staticmethod
+            def signal(signum: int, handler: object) -> None:
+                seen.append(signum)
+
+            @staticmethod
+            def pthread_sigmask(how: int, mask: object) -> set[int]:
+                return set()
+
+        with mock.patch("scripts.bounded_search.signal", MissingXfsz):
+            _child_reset_inherited_signal_mask()
+        self.assertIn(signal.SIGPIPE, seen)
+        if hasattr(signal, "SIGXFSZ"):
+            self.assertNotIn(signal.SIGXFSZ, seen)
 
     def test_cli_match_and_too_broad_root(self) -> None:
         self.assertEqual(DEFAULT_TIMEOUT_SECONDS, 15)
