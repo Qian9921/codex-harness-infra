@@ -206,18 +206,18 @@ class TaskBootstrapTests(unittest.TestCase):
             ]
             self.assertEqual(semble_timeouts, [SEMBLE_TIMEOUT_SECONDS])
 
-    def test_hook_timeout_budget_covers_measured_semble_and_daemon_version(self) -> None:
-        worst_case = (
+    def test_hook_timeout_budget_covers_live_runtime_only(self) -> None:
+        self.assertGreaterEqual(SEMBLE_TIMEOUT_SECONDS, 36)
+        self.assertGreaterEqual(LIVE_PROBE_TIMEOUT_SECONDS, 12)
+        self.assertLessEqual(LIVE_PROBE_TIMEOUT_SECONDS + 10, HOOK_TIMEOUT_SECONDS)
+        self.assertLess(HOOK_TIMEOUT_SECONDS, 40)
+        probe_budget = (
             GIT_DISCOVERY_TIMEOUT_SECONDS * 2
             + CODEGRAPH_TIMEOUT_SECONDS * 4
             + SEMBLE_TIMEOUT_SECONDS
             + RTK_TIMEOUT_SECONDS
-            + LIVE_PROBE_TIMEOUT_SECONDS
         )
-        self.assertGreaterEqual(SEMBLE_TIMEOUT_SECONDS, 36)
-        self.assertGreaterEqual(LIVE_PROBE_TIMEOUT_SECONDS, 12)
-        self.assertLessEqual(worst_case, HOOK_TIMEOUT_SECONDS)
-        self.assertGreaterEqual(HOOK_TIMEOUT_SECONDS, 130)
+        self.assertGreaterEqual(probe_budget, 90)
 
     def test_live_state_uses_current_install_json_not_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -373,7 +373,9 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertEqual(set(output), {"hookEventName", "additionalContext"})
             self.assertEqual(output["hookEventName"], "UserPromptSubmit")
             context = output["additionalContext"]
-            self.assertIn("V23 required tool bootstrap", context)
+            self.assertNotIn("V23 required tool bootstrap", context)
+            self.assertNotIn("Repair the failed required tool", context)
+            self.assertIn("must not block", context)
             self.assertIn("V23 live runtime state", context)
             self.assertIn("memory of prior tasks is historical only", context)
             self.assertNotIn("ignored", context)

@@ -39,7 +39,7 @@ State the comparison target, input domain, metric, and limitations. Distinguish 
 
 ## Documentation
 
-Write for the reader's next action: explain what the reader can do, prerequisites, expected result, failure recovery, and source provenance where it matters. Record why a non-obvious architectural decision was made in `docs/decisions/`. Keep permanent instructions short; put reusable detail in the relevant on-demand reference.
+Write for the reader's next action: explain what the reader can do, prerequisites, expected result, failure recovery, and source provenance where it matters. Record why a non-obvious architectural decision was made in `docs/decisions/`. Keep permanent instructions short; put reusable detail in the relevant on-demand reference. Search only an explicit repository, module, or file set.
 
 ## Sources
 

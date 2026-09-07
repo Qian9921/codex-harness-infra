@@ -221,7 +221,11 @@ def run_live(
     except (KeyError, TypeError, json.JSONDecodeError):
         context = "invalid Hook response"
     doctor_report = doctor(resolved_home, local_config, ROOT, check_github=False)
-    ready = all(f"{tool}=ready" in context for tool in ("CodeGraph", "Semble", "RTK"))
+    ready = (
+        "V23 live runtime state" in context
+        and "Repair the failed required tool" not in context
+        and "must not block" in context
+    )
     return {
         "name": "installed_hook_and_doctor",
         "status": "PASS" if hook.returncode == 0 and ready and doctor_report["ok"] else "FAIL",

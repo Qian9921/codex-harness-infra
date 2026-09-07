@@ -50,6 +50,7 @@ class InstallerTests(unittest.TestCase):
         )
         (repo / "scripts/task_bootstrap.py").write_text("print('bootstrap')\n", encoding="utf-8")
         (repo / "scripts/grok_execution.py").write_text("print('grok bridge')\n", encoding="utf-8")
+        (repo / "scripts/bounded_search.py").write_text("print('search')\n", encoding="utf-8")
         skill = repo / ".agents/skills/engineering-delivery"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
@@ -59,6 +60,10 @@ class InstallerTests(unittest.TestCase):
         grok_skill.mkdir(parents=True)
         (grok_skill / "SKILL.md").write_text(
             "---\nname: grok-execution\ndescription: Test.\n---\n", encoding="utf-8"
+        )
+        (grok_skill / "references").mkdir()
+        (grok_skill / "references/grok-process-lifecycle.md").write_text(
+            "# lifecycle\n", encoding="utf-8"
         )
         local = root / "local.toml"
         local.write_text(
@@ -125,7 +130,13 @@ instruction = "Local-only opening."
             self.assertIn(f"timeout = {HOOK_TIMEOUT_SECONDS}", config_text)
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
+            self.assertTrue((codex_home / "bin/bounded-search.py").is_file())
             self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
+            self.assertTrue(
+                (
+                    codex_home / "skills/grok-execution/references/grok-process-lifecycle.md"
+                ).is_file()
+            )
             self.assertFalse((codex_home / "AGENTS.override.md").exists())
             manifest = json.loads((state_dir / "install.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["agents_path"], str(agents))
@@ -602,6 +613,12 @@ instruction = "Local-only opening."
             self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
+            self.assertTrue((codex_home / "bin/bounded-search.py").is_file())
+            self.assertTrue(
+                (
+                    codex_home / "skills/grok-execution/references/grok-process-lifecycle.md"
+                ).is_file()
+            )
             installed_help = subprocess.run(
                 [sys.executable, str(codex_home / "bin/grok-execution.py"), "--help"],
                 text=True,
@@ -635,6 +652,10 @@ instruction = "Local-only opening."
             self.assertFalse((codex_home / "skills/grok-execution").exists())
             self.assertFalse((codex_home / "harness/v23/task_bootstrap.py").exists())
             self.assertFalse((codex_home / "bin/grok-execution.py").exists())
+            self.assertFalse((codex_home / "bin/bounded-search.py").exists())
+            self.assertFalse(
+                (codex_home / "skills/grok-execution/references/grok-process-lifecycle.md").exists()
+            )
 
     def test_install_preserves_unowned_hook_trust_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

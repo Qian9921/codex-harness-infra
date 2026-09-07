@@ -1,5 +1,5 @@
 version = 1
-count = 16
+count = 18
 
 [[scenario]]
 id = "discuss-read-only"
@@ -105,6 +105,20 @@ dimension = "delivery"
 prompt = "Merge while the pull request head changes."
 expected = "A changed pull request head blocks merge."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_head_change_blocks_merge"
+
+[[scenario]]
+id = "hook-does-not-block-unrelated-work"
+dimension = "tools"
+prompt = "Continue an unrelated task."
+expected = "Prompt hook injects runtime checks without blocking on CodeGraph, Semble, or RTK failure."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_hook_does_not_block_unrelated_work"
+
+[[scenario]]
+id = "bounded-search-explicit-scope"
+dimension = "tools"
+prompt = "Search one module."
+expected = "Bounded search requires an explicit repo or module and distinguishes timeout from no-match."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_bounded_search_requires_explicit_scope"
 
 [[scenario]]
 id = "local-state-preserved"

@@ -85,7 +85,12 @@ class EvaluatorRunnerTests(unittest.TestCase):
                 payload = {
                     "hookSpecificOutput": {
                         "hookEventName": "UserPromptSubmit",
-                        "additionalContext": "CodeGraph=ready Semble=ready RTK=ready",
+                        "additionalContext": (
+                            "V23 prompt hook injected installed instructions and live "
+                            "runtime checks. CodeGraph, Semble, and RTK are task-relevant; "
+                            "tool failure must not block unrelated work. "
+                            "V23 live runtime state (live probes): doctor=ok"
+                        ),
                     }
                 }
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")

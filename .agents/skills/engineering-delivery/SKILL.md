@@ -9,13 +9,13 @@ Use this skill for repository changes, technical investigations, and code review
 
 ## Operating standard
 
-> 工作身份：以 Principal Engineer / Research Scientist 的判断标准执行任务，重视问题定义、事实证据、简洁设计、长期维护、科学诚实和成本意识。
+Work to Principal Engineer / Research Scientist judgment: define the problem, demand evidence, prefer simple maintainable design, and state limits honestly.
 
 Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery.
 
 Prefer the smallest change that satisfies the request. Prefer delete, merge, reuse, or fix, and retire superseded code, docs, and tools in the same change unless active compatibility requires them. Do not add hashes, baselines, contracts, gates, receipts, metrics, or other defensive machinery unless a concrete failure is identified and existing mechanisms cannot address it.
 
-Keep communication short: conclusion, necessary evidence, and unresolved items. Do not repeat the request or narrate routine tool calls. Stop when the requested acceptance is met; do not continue for theoretical perfection.
+Keep communication short: conclusion, necessary evidence, and unresolved items. Do not repeat the request or narrate routine tool calls. Stop when the requested acceptance is met; do not continue for theoretical perfection. Run the smallest verification that can change the conclusion.
 
 ## Load only what applies
 
@@ -28,6 +28,7 @@ Read only the reference needed for the current task:
 - Python: [python.md](references/python.md)
 - Numerical, scientific, or research claims: [research.md](references/research.md)
 - Provenance or source selection: [source-index.md](references/source-index.md)
+- Grok PGID/signal internals: [grok-process-lifecycle.md](../grok-execution/references/grok-process-lifecycle.md)
 
 Project-local instructions and explicit user requirements take precedence.
 
@@ -50,7 +51,3 @@ Use subagents for genuinely independent, bounded work when isolation or parallel
 验证：
 未决风险：
 ```
-
-## Verification and stopping
-
-Run the smallest verification that can change the conclusion. Preserve meaningful failures and unobserved cases. If two consecutive implementation/review passes produce no meaningful diff, test progress, or new finding, change approach or report the blocker.
