@@ -80,6 +80,9 @@ def _github_environment(config_dir: Path) -> dict[str, str]:
             env.pop(variable)
     env["GH_CONFIG_DIR"] = str(config_dir)
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["NO_COLOR"] = "1"
+    env["CLICOLOR"] = "0"
+    env.pop("GH_FORCE_TTY", None)
     # The author push uses a prevalidated literal URL, so it does not need
     # repository, global, or system Git configuration. Keeping those sources
     # out prevents a later URL rewrite or scoped credential override.
