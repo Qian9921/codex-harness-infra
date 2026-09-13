@@ -588,6 +588,41 @@ availability = "configured"
         )
         self.assertEqual(allowed.status, "fallback")
 
+    def test_paid_strict_metered_grok_does_not_require_grok(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "metered"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        policy = parse_policy(__import__("tomllib").loads(text))
+        self.assertFalse(policy.grok_required)
+        self.assertFalse(grok_checks_required(policy))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.selected_id, "native")
+        self.assertEqual(result.backend, "codex")
+
 
 if __name__ == "__main__":
     unittest.main()

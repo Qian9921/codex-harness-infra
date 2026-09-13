@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -194,6 +195,60 @@ availability = "configured"
             self.assertTrue(checks["grok_execution_route"]["ok"])
             self.assertIn("unrequired", str(checks["grok_execution_route"]["detail"]))
             self.assertTrue(checks["executor_routing"]["ok"])
+
+    def test_paid_strict_metered_grok_doctor_without_grok_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "metered"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/grok-execution.py").unlink()
+            (codex_home / "skills/grok-execution/SKILL.md").unlink()
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(report["ok"], report["checks"])
+            self.assertTrue(checks["grok_execution_route"]["ok"])
+            self.assertIn("unrequired", str(checks["grok_execution_route"]["detail"]))
+            executor = tomllib.loads((codex_home / "agents/v23-executor.toml").read_text())
+            self.assertEqual(executor["model"], "executor-model")
+            self.assertNotIn("GROK_FALLBACK_NOT_AUTHORIZED", executor["developer_instructions"])
 
     def test_new_user_native_only_blank_greeting_without_github(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

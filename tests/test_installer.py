@@ -863,6 +863,76 @@ availability = "configured"
             self.assertEqual(planted.read_text(encoding="utf-8"), "keep\n")
             self.assertTrue((home / "agents").is_symlink())
 
+    def test_obsolete_retirement_refuses_symlink_without_deleting_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            two = """
+[models]
+primary = "primary-model"
+executor = "default-native"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "fast"
+backend = "codex"
+actual_model = "different-model"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+"""
+            local.write_text(two.lstrip() + "\n", encoding="utf-8")
+            codex_home, state_dir = root / "codex", root / "state"
+            install(ROOT, codex_home, local, state_dir)
+            extra = codex_home / "agents/v23-executor-native.toml"
+            self.assertTrue(extra.is_file())
+            personal = codex_home / "personal.toml"
+            personal.write_text(extra.read_text(encoding="utf-8"), encoding="utf-8")
+            extra.unlink()
+            extra.symlink_to(personal)
+            one = two.replace(
+                """
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""",
+                "",
+            )
+            local.write_text(one.lstrip() + "\n", encoding="utf-8")
+            default_role = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+            with self.assertRaisesRegex(InstallError, "refusing to retire symlink"):
+                install(ROOT, codex_home, local, state_dir)
+            self.assertTrue(extra.is_symlink())
+            self.assertEqual(
+                personal.read_text(encoding="utf-8"), extra.read_text(encoding="utf-8")
+            )
+            self.assertTrue(personal.is_file())
+            self.assertFalse(personal.is_symlink())
+            self.assertEqual(
+                (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8"),
+                default_role,
+            )
+            self.assertTrue((state_dir / "install.json").is_file())
+
     def test_mode_only_upgrade_to_native_only_with_dormant_grok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

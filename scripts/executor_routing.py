@@ -290,13 +290,23 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
         item.backend == BACKEND_CODEX for item in executors
     ):
         raise RoutingError("native_only requires a Codex backend executor")
-    grok_live = any(
-        item.backend == BACKEND_GROK and item.availability == AVAIL_CONFIGURED
-        for item in grok_sources
-    )
-    grok_required = grok_live and selection != SELECTION_NATIVE_ONLY
     native_is_fallback = bool(
         selection != SELECTION_NATIVE_ONLY and PERMIT_QUOTA in permit and grok_sources and target_id
+    )
+    tentative = RoutingPolicy(
+        selection=selection,
+        executors=executors,
+        fallback_permit=permit,
+        fallback_target=target_id,
+        grok_required=False,
+        legacy=False,
+        native_is_fallback=native_is_fallback,
+    )
+    grok_required = any(
+        item.backend == BACKEND_GROK
+        and item.availability == AVAIL_CONFIGURED
+        and mode_allows_initial(tentative, item)
+        for item in executors
     )
     return RoutingPolicy(
         selection=selection,

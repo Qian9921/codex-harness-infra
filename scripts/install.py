@@ -457,6 +457,11 @@ def _retireable_obsolete(
             if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
                 raise InstallError(f"unsafe V23 asset parent: {parent}")
             parent = parent.parent
+        if raw.is_symlink():
+            raise InstallError(
+                f"refusing to retire symlink V23 asset: {raw}. "
+                "The installer will not follow or delete the symlink target."
+            )
         confined = ensure_within(codex_home, raw)
         dummy = Asset(confined, None, "file")
         _check_asset_parents(codex_home, dummy)
