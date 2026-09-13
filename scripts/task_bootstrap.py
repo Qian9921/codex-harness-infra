@@ -25,6 +25,22 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from scripts.executor_routing import RoutingError, grok_checks_required, parse_policy
+except ModuleNotFoundError:  # Installed copy lives beside this hook script.
+    try:
+        from executor_routing import RoutingError, grok_checks_required, parse_policy
+    except ModuleNotFoundError:  # pragma: no cover - installer always ships the helper.
+
+        class RoutingError(RuntimeError):
+            """Placeholder when the routing helper is absent."""
+
+        def parse_policy(config: dict) -> object:
+            return None
+
+        def grok_checks_required(policy: object) -> bool:
+            return True
+
 CODEGRAPH_BEGIN = "# BEGIN CODEX-HARNESS-INFRA V23 CODEGRAPH"
 CODEGRAPH_END = "# END CODEX-HARNESS-INFRA V23 CODEGRAPH"
 REQUIRED_TOOLS = ("codegraph", "semble", "rtk")
@@ -899,6 +915,30 @@ def local_installation_checks(
     configured = isinstance(models, dict) and all(
         models.get(key) for key in ("primary", "executor", "reviewer")
     )
+    routing_ok = True
+    routing_detail = "legacy grok-preferred"
+    require_grok = True
+    try:
+        policy = parse_policy(local)
+        require_grok = grok_checks_required(policy)
+        routing_detail = getattr(policy, "selection", "legacy")
+        if getattr(policy, "legacy", False):
+            routing_detail = "legacy grok-preferred paid_strict"
+    except RoutingError as error:
+        routing_ok = False
+        routing_detail = str(error)
+        require_grok = True
+    checks.append(("executor_routing", routing_ok, routing_detail))
+    if not require_grok:
+        rewritten: list[tuple[str, bool, str]] = []
+        for name, ok, detail in checks:
+            if name in {"grok_execution_route", "grok_process_lifecycle"}:
+                rewritten.append(
+                    (name, True, "unrequired for native_only" if not ok else detail)
+                )
+            else:
+                rewritten.append((name, ok, detail))
+        checks[:] = rewritten
     checks.append(("local_config", configured, str(local_config)))
     opening = local.get("opening", {})
     opening_ok = (

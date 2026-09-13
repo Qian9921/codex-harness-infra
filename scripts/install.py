@@ -30,8 +30,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
+    from scripts.executor_routing import (
+        RoutingError,
+        executor_agent_description,
+        parse_policy,
+        render_executor_agent,
+    )
     from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
 except ModuleNotFoundError:  # Support the documented direct script entrypoint.
+    from executor_routing import (  # type: ignore[no-redef]
+        RoutingError,
+        executor_agent_description,
+        parse_policy,
+        render_executor_agent,
+    )
     from task_bootstrap import HOOK_TIMEOUT_SECONDS
 
 VERSION = "23.2.0"
@@ -468,6 +480,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
     bounded_search_source = repo_root / "scripts/bounded_search.py"
+    routing_source = repo_root / "scripts/executor_routing.py"
     for source in (
         primary_template,
         executor_template,
@@ -477,19 +490,24 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         bootstrap_source,
         grok_bridge_source,
         bounded_search_source,
+        routing_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
+    try:
+        policy = parse_policy(config)
+    except RoutingError as error:
+        raise InstallError(f"invalid executor routing: {error}") from error
     primary = render_template(
         primary_template,
         primary_model=models.get("primary", ""),
         primary_effort=models.get("primary_effort", "high"),
         reviewer_model=models.get("reviewer", ""),
     )
-    executor = render_template(
-        executor_template,
-        executor_model=models.get("executor", ""),
-        executor_effort=models.get("executor_effort", "low"),
+    executor = render_executor_agent(
+        policy,
+        str(models.get("executor", "")),
+        str(models.get("executor_effort", "low")),
     )
     reviewer = render_template(reviewer_template, reviewer_model=models.get("reviewer", ""))
     try:
@@ -550,6 +568,16 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             bounded_search_source,
             "file",
         ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/executor-routing.py"),
+            routing_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/executor_routing.py"),
+            routing_source,
+            "file",
+        ),
     ]
 
 
@@ -559,6 +587,7 @@ def _config_block(
     local_config: Path,
     codex_home: Path,
     state_dir: Path,
+    executor_description: str,
 ) -> str:
     """Render the one native V23 prompt hook and agent registrations."""
     command = " ".join(
@@ -575,7 +604,7 @@ def _config_block(
         )
     )
     return f"""[agents.\"v23_executor\"]
-description = \"V23 quota-exhaustion-only native execution fallback.\"
+description = {json.dumps(executor_description)}
 config_file = \"agents/v23-executor.toml\"
 
 [agents.\"v23_reviewer\"]
@@ -680,12 +709,17 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     block_body(config_text, CONFIG_KIND)
     assets = _assets(repo_root, codex_home, config)
     bootstrap_path = codex_home / "harness/v23/task_bootstrap.py"
+    try:
+        policy = parse_policy(config)
+    except RoutingError as error:
+        raise InstallError(f"invalid executor routing: {error}") from error
     config_block = _config_block(
         runtime_python,
         bootstrap_path,
         local_config.resolve(),
         codex_home,
         state_dir,
+        executor_agent_description(policy),
     )
     old_assets = _old_assets(manifest)
     for asset in assets:

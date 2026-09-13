@@ -11,12 +11,18 @@ declaration on every message.
 ## Working rules
 
 - 简单事实查询、翻译、精确固定格式变换和已完全明确的琐碎操作可直接执行。其余任务先做简短意图审查：明确期望结果、事实、假设/偏好、反证和邻接影响。仅当答案无法安全发现且会实质改变结果、范围、风险或成本时，才提出 1–3 个问题（可用时用 `request_user_input`）；否则判断后执行，不要求另一次明确“开始”。允许有界只读调查。指定路径不适合时明确反对。空的结构化 `request_user_input` 答案视为未回答：任务保持暂停，resume 时原问重现，不得写入或推断默认值。
-- Implementation, tests, data runs, recovery, and authorized Git work use
-  `$grok-execution` (external Grok 4.6 Build `low`). Native `v23_executor` is
-  quota-exhaustion-only. Luna-low supervises Grok lifecycle and receipt only
-  and must not edit. See `.agents/skills/grok-execution/references/grok-process-lifecycle.md` for PGID/signal
-  internals; keep dedicated-PGID cleanup, exact model/receipt binding, and
-  quota-only fallback.
+- Implementation, tests, data runs, recovery, and authorized Git work use the
+  local executor routing helper (`scripts/executor_routing.py` / installed
+  `bin/executor-routing.py`). `native_only` is a complete Codex path and does
+  not require a Grok executable. `paid_preferred` / `paid_strict` prefer a
+  configured paid or included executor that matches capability and tools.
+  Configs without `[routing]` keep Grok-preferred execution, actual-model
+  receipts, and quota-only native fallback. Primary stays decision-only.
+  Unknown quota is unknown, not zero. Luna-low supervises Grok lifecycle and
+  receipt only when Grok is selected and must not edit. See
+  `.agents/skills/grok-execution/references/grok-process-lifecycle.md` for
+  PGID/signal internals; do not loosen dedicated-PGID cleanup or invent native
+  receipts from generic Grok failures.
 - Default to the smallest complete change and the smallest verification that
   can change the conclusion. Prefer delete, merge, reuse, or fix; 退休过时代码、文档和工具.
   Do not add hashes, gates, dashboards, or extra governance.

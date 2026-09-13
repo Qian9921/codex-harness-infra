@@ -21,6 +21,7 @@ REQUIRED_FILES = {
     ".agents/skills/grok-execution/SKILL.md",
     "scripts/grok_execution.py",
     "scripts/bounded_search.py",
+    "scripts/executor_routing.py",
     ".agents/skills/grok-execution/references/grok-process-lifecycle.md",
     "scripts/install.py",
     "scripts/doctor.py",

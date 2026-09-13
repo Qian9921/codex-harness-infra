@@ -51,6 +51,7 @@ class InstallerTests(unittest.TestCase):
         (repo / "scripts/task_bootstrap.py").write_text("print('bootstrap')\n", encoding="utf-8")
         (repo / "scripts/grok_execution.py").write_text("print('grok bridge')\n", encoding="utf-8")
         (repo / "scripts/bounded_search.py").write_text("print('search')\n", encoding="utf-8")
+        (repo / "scripts/executor_routing.py").write_text("print('routing')\n", encoding="utf-8")
         skill = repo / ".agents/skills/engineering-delivery"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
@@ -683,6 +684,54 @@ instruction = "Local-only opening."
             self.assertIn("/user-owned/hooks.json:stop:0:0", rendered)
             self.assertIsNotNone(block_body(rendered, "CONFIG"))
             self.assertIn("UserPromptSubmit", tomllib.loads(rendered)["hooks"])
+
+    def test_native_only_install_upgrade_uninstall_preserves_user_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "future-native-slug"
+executor_effort = "low"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = "Local-only opening."
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation", "tests"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home, state_dir = root / "codex", root / "state"
+            agents = codex_home / "AGENTS.md"
+            codex_home.mkdir()
+            agents.write_text("Personal rule.\n", encoding="utf-8")
+            install(ROOT, codex_home, local, state_dir)
+            executor = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+            self.assertIn("native_only", executor)
+            self.assertIn("Grok is not required", executor)
+            self.assertIn("future-native-slug", executor)
+            self.assertIn("Personal rule.", agents.read_text(encoding="utf-8"))
+            self.assertTrue((codex_home / "bin/executor-routing.py").is_file())
+            config = (codex_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn("V23 native implementation executor", config)
+            install(ROOT, codex_home, local, state_dir)
+            self.assertIn("Personal rule.", agents.read_text(encoding="utf-8"))
+            uninstall(codex_home, state_dir)
+            self.assertTrue(agents.exists())
+            self.assertIn("Personal rule.", agents.read_text(encoding="utf-8"))
+            self.assertFalse((codex_home / "bin/executor-routing.py").exists())
 
 
 if __name__ == "__main__":

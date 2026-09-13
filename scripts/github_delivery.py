@@ -517,7 +517,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--event", choices=("APPROVE", "REQUEST_CHANGES", "COMMENT"), default="APPROVE"
     )
     parser.add_argument("--body", default="Independent current-head review.")
+    parser.add_argument("--body-file", type=Path)
     args = parser.parse_args(argv)
+    if args.body_file is not None:
+        args.body = args.body_file.read_text(encoding="utf-8")
     flow = DeliveryFlow(
         GHClient(args.author_config),
         GHClient(args.reviewer_config),

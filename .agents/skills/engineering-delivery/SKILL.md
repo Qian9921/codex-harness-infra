@@ -29,6 +29,7 @@ Read only the reference needed for the current task:
 - Numerical, scientific, or research claims: [research.md](references/research.md)
 - Provenance or source selection: [source-index.md](references/source-index.md)
 - Grok PGID/signal internals: [grok-process-lifecycle.md](../grok-execution/references/grok-process-lifecycle.md)
+- Executor routing: run `python scripts/executor_routing.py select --local-config <file> --capability implementation` (installed `bin/executor-routing.py`). Do not assign implementation back to primary.
 
 Project-local instructions and explicit user requirements take precedence.
 
