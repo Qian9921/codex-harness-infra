@@ -46,7 +46,10 @@ except ModuleNotFoundError:  # Installed copy lives beside this hook script.
             grok_checks_required,
             parse_policy,
         )
-    except ModuleNotFoundError:  # pragma: no cover - installer always ships the helper.
+    except ModuleNotFoundError:
+        if (Path(__file__).resolve().parent / "executor_routing.py").is_file():
+            raise
+        # pragma: no cover - installer always ships the helper.
 
         class RoutingError(RuntimeError):
             """Placeholder when the routing helper is absent."""
@@ -960,6 +963,25 @@ def local_installation_checks(
         routing_detail = str(error)
         require_grok = True
     checks.append(("executor_routing", routing_ok, routing_detail))
+    routing_pairs = (
+        (
+            codex_home / "bin/executor-routing.py",
+            codex_home / "bin/runtime.py",
+        ),
+        (
+            codex_home / "harness/v23/executor_routing.py",
+            codex_home / "harness/v23/runtime.py",
+        ),
+    )
+    entry_ok = True
+    entry_details: list[str] = []
+    for helper, runtime in routing_pairs:
+        helper_ok, helper_detail = _bridge_file(helper)
+        runtime_ok, runtime_detail = _bridge_file(runtime)
+        if not helper_ok or not runtime_ok:
+            entry_ok = False
+        entry_details.append(f"{helper_detail}; {runtime_detail}")
+    checks.append(("executor_routing_entrypoint", entry_ok, "; ".join(entry_details)))
     if not require_grok:
         rewritten: list[tuple[str, bool, str]] = []
         for name, ok, detail in checks:

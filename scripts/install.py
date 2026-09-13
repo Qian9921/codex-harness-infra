@@ -542,6 +542,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
     bounded_search_source = repo_root / "scripts/bounded_search.py"
     routing_source = repo_root / "scripts/executor_routing.py"
+    runtime_source = repo_root / "scripts/runtime.py"
     for source in (
         primary_template,
         executor_template,
@@ -552,6 +553,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         grok_bridge_source,
         bounded_search_source,
         routing_source,
+        runtime_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
@@ -659,6 +661,16 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         Asset(
             ensure_within(codex_home, codex_home / "harness/v23/executor_routing.py"),
             routing_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/runtime.py"),
+            runtime_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/runtime.py"),
+            runtime_source,
             "file",
         ),
         *extra_executors,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,7 @@ class InstallerTests(unittest.TestCase):
         (repo / "scripts/grok_execution.py").write_text("print('grok bridge')\n", encoding="utf-8")
         (repo / "scripts/bounded_search.py").write_text("print('search')\n", encoding="utf-8")
         (repo / "scripts/executor_routing.py").write_text("print('routing')\n", encoding="utf-8")
+        (repo / "scripts/runtime.py").write_text("print('runtime')\n", encoding="utf-8")
         skill = repo / ".agents/skills/engineering-delivery"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
@@ -595,6 +597,10 @@ instruction = "Local-only opening."
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
             self.assertTrue((codex_home / "bin/bounded-search.py").is_file())
+            self.assertTrue((codex_home / "bin/executor-routing.py").is_file())
+            self.assertTrue((codex_home / "bin/runtime.py").is_file())
+            self.assertTrue((codex_home / "harness/v23/executor_routing.py").is_file())
+            self.assertTrue((codex_home / "harness/v23/runtime.py").is_file())
             self.assertTrue(
                 (
                     codex_home / "skills/grok-execution/references/grok-process-lifecycle.md"
@@ -634,6 +640,9 @@ instruction = "Local-only opening."
             self.assertFalse((codex_home / "harness/v23/task_bootstrap.py").exists())
             self.assertFalse((codex_home / "bin/grok-execution.py").exists())
             self.assertFalse((codex_home / "bin/bounded-search.py").exists())
+            self.assertFalse((codex_home / "bin/executor-routing.py").exists())
+            self.assertFalse((codex_home / "bin/runtime.py").exists())
+            self.assertFalse((codex_home / "harness/v23/runtime.py").exists())
             self.assertFalse(
                 (codex_home / "skills/grok-execution/references/grok-process-lifecycle.md").exists()
             )
@@ -1046,6 +1055,197 @@ availability = "configured"
                 registered[result.invocation["agent"]]["config_file"],
                 result.invocation["config_file"],
             )
+
+    def _clean_python_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        return env
+
+    def test_installed_cli_selects_native_outside_source_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "cwd"
+            outside.mkdir()
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "native-slug-future"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home, state_dir = root / "codex", root / "state"
+            install(ROOT, codex_home, local, state_dir)
+            (codex_home / "bin/grok-execution.py").unlink()
+            cli = codex_home / "bin/executor-routing.py"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(cli),
+                    "select",
+                    "--local-config",
+                    str(local),
+                    "--capability",
+                    "implementation",
+                    "--tool",
+                    "workspace-write",
+                ],
+                cwd=outside,
+                env=self._clean_python_env(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["selected_id"], "native")
+            self.assertEqual(payload["actual_model"], "native-slug-future")
+            self.assertEqual(payload["invocation"]["agent"], "v23_executor")
+            agent = tomllib.loads((codex_home / payload["invocation"]["config_file"]).read_text())
+            self.assertEqual(agent["model"], "native-slug-future")
+            hook = subprocess.run(
+                [sys.executable, str(codex_home / "harness/v23/task_bootstrap.py"), "--help"],
+                cwd=outside,
+                env=self._clean_python_env(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(hook.returncode, 0, hook.stderr)
+            report = doctor(
+                codex_home, local, ROOT / "tests", check_github=True, probe_required_tools=False
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["executor_routing_entrypoint"]["ok"])
+            self.assertTrue(report["ok"], report["checks"])
+            install(ROOT, codex_home, local, state_dir)
+            self.assertTrue((codex_home / "bin/runtime.py").is_file())
+            uninstall(codex_home, state_dir)
+            self.assertFalse((codex_home / "bin/runtime.py").exists())
+            self.assertFalse((codex_home / "harness/v23/runtime.py").exists())
+
+    def test_installed_cli_legacy_still_selects_grok(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outside = root / "cwd"
+            outside.mkdir()
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "luna-low"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = "Local-only opening."
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(codex_home / "bin/executor-routing.py"),
+                    "select",
+                    "--local-config",
+                    str(local),
+                    "--capability",
+                    "implementation",
+                    "--tool",
+                    "workspace-write",
+                ],
+                cwd=outside,
+                env=self._clean_python_env(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["backend"], "grok")
+            self.assertEqual(payload["actual_model"], "grok-4.6-build")
+
+    def test_missing_installed_runtime_is_doctor_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "native-slug"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/runtime.py").unlink()
+            (codex_home / "harness/v23/runtime.py").unlink()
+            outside = root / "cwd"
+            outside.mkdir()
+            hook = subprocess.run(
+                [sys.executable, str(codex_home / "harness/v23/task_bootstrap.py"), "--help"],
+                cwd=outside,
+                env=self._clean_python_env(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(hook.returncode, 0, hook.stdout)
+            self.assertIn("runtime", (hook.stderr + hook.stdout).casefold())
+            report = doctor(
+                codex_home, local, ROOT / "tests", check_github=False, probe_required_tools=False
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertFalse(checks["executor_routing_entrypoint"]["ok"])
+            self.assertFalse(report["ok"])
+            self.assertEqual(checks["executor_routing"]["detail"], "native_only")
+
+    def test_install_refuses_unowned_runtime_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home = root / "codex"
+            sidecar = codex_home / "bin/runtime.py"
+            sidecar.parent.mkdir(parents=True)
+            sidecar.write_text("personal runtime\n", encoding="utf-8")
+            with self.assertRaisesRegex(InstallError, "unowned asset"):
+                install(repo, codex_home, local, root / "state")
+            self.assertEqual(sidecar.read_text(encoding="utf-8"), "personal runtime\n")
 
 
 if __name__ == "__main__":
