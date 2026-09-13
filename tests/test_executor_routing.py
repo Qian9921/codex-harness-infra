@@ -10,6 +10,8 @@ from pathlib import Path
 from scripts.executor_routing import (
     PERMIT_QUOTA,
     RECEIPT_SCHEMA,
+    default_native_spec,
+    executor_agent_instructions,
     parse_policy,
     select_executor,
     validate_fallback_receipt,
@@ -141,14 +143,14 @@ class ExecutorRoutingTests(unittest.TestCase):
         )
         policy = parse_policy(__import__("tomllib").loads(text))
         self.assertFalse(policy.grok_required)
-        self.assertFalse(policy.native_is_fallback)
         result = select_executor(
             policy, capabilities=("implementation",), tools=("workspace-write",)
         )
         self.assertEqual(result.selected_id, "native")
         self.assertEqual(result.status, "selected")
         self.assertFalse(result.fallback_authorized)
-        self.assertEqual(result.invocation["kind"], "codex_agent")
+        self.assertFalse(result.native_is_fallback)
+        self.assertEqual(result.invocation["kind"], "codex_subagent")
         self.assertEqual(result.invocation["model"], "native-slug-future")
 
     def test_generic_failure_does_not_authorize_fallback(self) -> None:
@@ -213,8 +215,8 @@ class ExecutorRoutingTests(unittest.TestCase):
 
     def test_forbidden_fallback_stays_blocked(self) -> None:
         text = PAID_STRICT.replace(
-            'permit = ["quota_exhausted"]\ntarget = "native"',
-            'permit = []\ntarget = "native"',
+            '[routing.fallback]\npermit = ["quota_exhausted"]\ntarget = "native"\n',
+            "",
         )
         policy = parse_policy(__import__("tomllib").loads(text))
         owned = ["/tmp/work/owned"]
@@ -352,6 +354,151 @@ class ExecutorRoutingTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "blocked")
         self.assertIn("requested_model", result.blocked or "")
+
+    def test_missing_requested_model_is_not_authorized(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(LEGACY))
+        owned = ["/tmp/work/owned"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "grok_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+        }
+        result = validate_fallback_receipt(
+            policy,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertFalse(result.fallback_authorized)
+        self.assertIn("requested_model", result.blocked or "")
+
+    def test_unknown_actual_model_is_allowed_on_quota_receipt(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(LEGACY))
+        owned = ["/tmp/work/owned"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "grok_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "grok-4.6",
+        }
+        result = validate_fallback_receipt(
+            policy,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(result.status, "fallback")
+        self.assertTrue(result.fallback_authorized)
+
+    def test_native_only_rejects_fake_grok_receipt(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
+        owned = ["/tmp/work/owned"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "grok_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "grok-4.6",
+        }
+        result = validate_fallback_receipt(
+            policy,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertIn("does not authorize Grok quota fallback", result.blocked or "")
+
+    def test_explicit_choice_and_forbidden_legacy_native(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(PAID_BOTH))
+        grok = select_executor(
+            policy,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+            executor_id="grok_build",
+            choice_reason="task needs the paid Grok adapter",
+        )
+        self.assertEqual(grok.status, "selected")
+        self.assertEqual(grok.selected_id, "grok_build")
+        native = select_executor(
+            policy,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+            executor_id="native",
+            choice_reason="prefer included native for this task",
+        )
+        self.assertEqual(native.status, "selected")
+        legacy = parse_policy(__import__("tomllib").loads(LEGACY))
+        blocked = select_executor(
+            legacy,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+            executor_id="native",
+            choice_reason="try native",
+        )
+        self.assertEqual(blocked.status, "blocked")
+        self.assertIn("quota-fallback-only", blocked.blocked or "")
+
+    def test_path_separator_executor_id_rejected(self) -> None:
+        text = NATIVE_ONLY.replace('id = "native"', 'id = "native/../x"')
+        with self.assertRaisesRegex(Exception, "portable token"):
+            parse_policy(__import__("tomllib").loads(text))
+
+    def test_quota_fallback_must_be_grok_to_codex(self) -> None:
+        text = PAID_BOTH.replace('target = "native"', 'target = "grok_build"')
+        with self.assertRaisesRegex(Exception, "Codex executor"):
+            parse_policy(__import__("tomllib").loads(text))
+        no_grok = (
+            NATIVE_ONLY + '\n[routing.fallback]\npermit = ["quota_exhausted"]\ntarget = "native"\n'
+        )
+        no_grok = no_grok.replace('selection = "native_only"', 'selection = "paid_preferred"')
+        with self.assertRaisesRegex(Exception, "Grok source"):
+            parse_policy(__import__("tomllib").loads(no_grok))
+
+    def test_paid_strict_codex_paid_is_normal_role(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        policy = parse_policy(__import__("tomllib").loads(text))
+        self.assertFalse(policy.native_is_fallback)
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.status, "selected")
+        self.assertFalse(result.native_is_fallback)
+        spec = default_native_spec(policy)
+        self.assertNotIn("Act only when the", executor_agent_instructions(policy, spec))
 
 
 if __name__ == "__main__":

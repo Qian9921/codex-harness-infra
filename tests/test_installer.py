@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 import scripts.install as install_mod
+from scripts.doctor import doctor
 from scripts.install import (
     MARKER,
     PORTABLE_KIND,
@@ -303,7 +304,9 @@ instruction = "Local-only opening."
                 install(repo, codex_home, local, state_dir)
             self.assertTrue(override.exists())
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
-            self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8"))["agents_path"], str(override))
+            self.assertEqual(
+                json.loads(manifest_path.read_text(encoding="utf-8"))["agents_path"], str(override)
+            )
 
     KNOWN_V21_FIXTURE = (
         "# Codex Governance Infra V21 personal kernel\n"
@@ -745,6 +748,87 @@ availability = "configured"
             executor = tomllib.loads((codex_home / "agents/v23-executor.toml").read_text())
             self.assertEqual(executor["model"], "native-slug")
             self.assertIn("native_only", executor["developer_instructions"])
+            report = doctor(
+                codex_home, local, ROOT / "tests", check_github=True, probe_required_tools=False
+            )
+            self.assertTrue(report["ok"], report["checks"])
+            install(ROOT, codex_home, local, state_dir)
+            uninstall_report = uninstall(codex_home, state_dir)
+            self.assertTrue(any("removed V23 installation" in line for line in uninstall_report))
+            self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
+
+    def test_candidate_retirement_and_user_edit_preservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            two = """
+[models]
+primary = "primary-model"
+executor = "default-native"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "fast"
+backend = "codex"
+actual_model = "different-model"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+"""
+            local.write_text(two.lstrip() + "\n", encoding="utf-8")
+            codex_home, state_dir = root / "codex", root / "state"
+            install(ROOT, codex_home, local, state_dir)
+            extra = codex_home / "agents/v23-executor-native.toml"
+            self.assertTrue(extra.is_file())
+            self.assertEqual(
+                tomllib.loads((codex_home / "agents/v23-executor.toml").read_text())["model"],
+                "different-model",
+            )
+            one = two.replace(
+                """
+[[routing.executors]]
+id = "fast"
+backend = "codex"
+actual_model = "different-model"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+""",
+                "",
+            )
+            local.write_text(one.lstrip() + "\n", encoding="utf-8")
+            install(ROOT, codex_home, local, state_dir)
+            self.assertFalse(extra.exists())
+            local.write_text(two.lstrip() + "\n", encoding="utf-8")
+            install(ROOT, codex_home, local, state_dir)
+            extra.write_text(extra.read_text(encoding="utf-8") + "user edit\n", encoding="utf-8")
+            local.write_text(one.lstrip() + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(InstallError, "modified obsolete"):
+                install(ROOT, codex_home, local, state_dir)
+            self.assertIn("user edit", extra.read_text(encoding="utf-8"))
+            extra.write_text(
+                extra.read_text(encoding="utf-8").replace("user edit\n", ""), encoding="utf-8"
+            )
+            install(ROOT, codex_home, local, state_dir)
+            uninstall(codex_home, state_dir)
+            self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
+            self.assertFalse(extra.exists())
 
     def test_selected_candidate_model_is_installed_on_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

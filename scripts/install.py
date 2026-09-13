@@ -521,7 +521,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     native = default_native_spec(policy)
     default_model = native.actual_model if native is not None else str(models.get("executor", ""))
     try:
-        executor = render_executor_agent(policy, default_model, effort)
+        executor = render_executor_agent(policy, default_model, effort, spec=native)
     except RoutingError as error:
         raise InstallError(f"invalid executor routing: {error}") from error
     reviewer = render_template(reviewer_template, reviewer_model=models.get("reviewer", ""))
@@ -545,7 +545,9 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         if name == "v23_executor":
             continue
         try:
-            rendered = render_executor_agent(policy, spec.actual_model, effort, name=name)
+            rendered = render_executor_agent(
+                policy, spec.actual_model, effort, name=name, spec=spec
+            )
         except RoutingError as error:
             raise InstallError(f"invalid executor routing: {error}") from error
         _validate_agent_content(rendered, name, spec.actual_model, effort)
@@ -751,6 +753,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     except RoutingError as error:
         raise InstallError(f"invalid executor routing: {error}") from error
     extra_agent_blocks = []
+    native = default_native_spec(policy)
     for spec in policy.executors:
         if spec.backend != "codex":
             continue
@@ -759,7 +762,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
             continue
         extra_agent_blocks.append(
             f"[agents.{json.dumps(name)}]\n"
-            f"description = {json.dumps(executor_agent_description(policy))}\n"
+            f"description = {json.dumps(executor_agent_description(policy, spec))}\n"
             f"config_file = {json.dumps(executor_agent_file(spec, policy))}\n"
         )
     config_block = _config_block(
@@ -768,10 +771,24 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         local_config.resolve(),
         codex_home,
         state_dir,
-        executor_agent_description(policy),
+        executor_agent_description(policy, native),
         "\n".join(extra_agent_blocks),
     )
     old_assets = _old_assets(manifest)
+    new_paths = {str(asset.path) for asset in assets}
+    obsolete: list[Path] = []
+    for path_text, digest in old_assets.items():
+        if path_text in new_paths:
+            continue
+        path = Path(path_text)
+        if not path.exists():
+            continue
+        if path.is_symlink() or digest_path(path) != digest:
+            raise InstallError(
+                f"refusing to retire modified obsolete V23 asset: {path}. "
+                "Preserve the edit or restore the owned digest before upgrade."
+            )
+        obsolete.append(path)
     for asset in assets:
         _check_asset_parents(codex_home, asset)
         _check_asset_target(asset, old_assets)
@@ -794,6 +811,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         _snapshot_path(agents_path),
         _snapshot_path(codex_config),
         *(_snapshot_path(asset.path) for asset in assets),
+        *(_snapshot_path(path) for path in obsolete),
         _snapshot_path(state_dir / MANIFEST_NAME),
     ]
     mutated = False
@@ -804,6 +822,11 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         for asset in assets:
             asset.path.parent.mkdir(parents=True, exist_ok=True)
             _copy_asset(asset)
+        for path in obsolete:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            elif path.exists() or path.is_symlink():
+                path.unlink()
         record = {
             "version": VERSION,
             "agents_path": str(agents_path),
@@ -842,15 +865,19 @@ def uninstall(codex_home: Path, state_dir: Path) -> list[str]:
         agent_text = ""
     else:
         agent_text = agents_path.read_text()
-        for kind, digest in (
-            (PORTABLE_KIND, manifest["portable_digest"]),
-            (LOCAL_KIND, manifest["local_digest"]),
+        portable_body = block_body(agent_text, PORTABLE_KIND)
+        if (
+            portable_body is None
+            or sha256_bytes(portable_body.encode()) != manifest["portable_digest"]
         ):
-            if (
-                block_body(agent_text, kind) is None
-                or sha256_bytes(block_body(agent_text, kind).encode()) != digest
-            ):
-                blockers.append(f"managed {kind.lower()} block was edited or is absent")
+            blockers.append("managed portable block was edited or is absent")
+        local_body = block_body(agent_text, LOCAL_KIND)
+        empty_local = manifest["local_digest"] == sha256_bytes(b"")
+        if empty_local:
+            if local_body is not None:
+                blockers.append("managed local block was edited or is absent")
+        elif local_body is None or sha256_bytes(local_body.encode()) != manifest["local_digest"]:
+            blockers.append("managed local block was edited or is absent")
     if not config_path.is_file() or config_path.is_symlink():
         blockers.append(f"managed Codex config is absent or unsafe: {config_path}")
         config_text = ""
@@ -868,7 +895,8 @@ def uninstall(codex_home: Path, state_dir: Path) -> list[str]:
     # All dependent assets and registrations are intact. Remove them as one
     # logical unit so no registration can point at a deleted V23 agent.
     agent_text, _ = remove_managed_block(agent_text, PORTABLE_KIND, manifest["portable_digest"])
-    agent_text, _ = remove_managed_block(agent_text, LOCAL_KIND, manifest["local_digest"])
+    if manifest["local_digest"] != sha256_bytes(b""):
+        agent_text, _ = remove_managed_block(agent_text, LOCAL_KIND, manifest["local_digest"])
     config_text, _ = remove_managed_block(config_text, CONFIG_KIND, manifest["config_digest"])
     atomic_write(agents_path, agent_text)
     atomic_write(config_path, config_text)

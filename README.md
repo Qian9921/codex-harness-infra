@@ -40,7 +40,11 @@ Supported adapters are native Codex and the existing Grok bridge. Cost preferenc
 
 ```text
 python scripts/executor_routing.py select --local-config <local-file> --capability implementation --tool workspace-write
+python scripts/executor_routing.py select --local-config <local-file> --capability implementation --executor <id> --reason "<why>"
+python scripts/executor_routing.py validate-receipt --local-config <local-file> --receipt <file> --task-id <id> --cwd <abs> --owned-path <abs>
 ```
+
+Automatic selection prefers a single suitable paid/included executor. Multiple suitable candidates require `--executor` and `--reason`. Native dispatch is a registered Codex custom agent spawn (`invocation.agent`); reinstall after local model mapping changes. Grok uses the existing bridge only.
 
 ## Delivery
 

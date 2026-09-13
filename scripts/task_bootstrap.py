@@ -68,6 +68,7 @@ except ModuleNotFoundError:  # Installed copy lives beside this hook script.
         def executor_agent_file(spec: object, policy: object) -> str:
             return "agents/v23-executor.toml"
 
+
 CODEGRAPH_BEGIN = "# BEGIN CODEX-HARNESS-INFRA V23 CODEGRAPH"
 CODEGRAPH_END = "# END CODEX-HARNESS-INFRA V23 CODEGRAPH"
 REQUIRED_TOOLS = ("codegraph", "semble", "rtk")
@@ -974,9 +975,7 @@ def local_installation_checks(
     if opening is None:
         opening = {}
     instruction = opening.get("instruction", "") if isinstance(opening, dict) else None
-    opening_ok = isinstance(opening, dict) and (
-        instruction is None or isinstance(instruction, str)
-    )
+    opening_ok = isinstance(opening, dict) and (instruction is None or isinstance(instruction, str))
     checks.append(
         (
             "local_opening",

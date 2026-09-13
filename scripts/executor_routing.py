@@ -15,6 +15,7 @@ ensure_supported_python(__file__)
 
 import argparse
 import json
+import re
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -25,9 +26,7 @@ from typing import Any
 SELECTION_NATIVE_ONLY = "native_only"
 SELECTION_PAID_PREFERRED = "paid_preferred"
 SELECTION_PAID_STRICT = "paid_strict"
-SELECTIONS = frozenset(
-    {SELECTION_NATIVE_ONLY, SELECTION_PAID_PREFERRED, SELECTION_PAID_STRICT}
-)
+SELECTIONS = frozenset({SELECTION_NATIVE_ONLY, SELECTION_PAID_PREFERRED, SELECTION_PAID_STRICT})
 BACKEND_GROK = "grok"
 BACKEND_CODEX = "codex"
 SUPPORTED_BACKENDS = frozenset({BACKEND_GROK, BACKEND_CODEX})
@@ -50,6 +49,7 @@ LEGACY_GROK_ID = "grok_build"
 LEGACY_NATIVE_ID = "native"
 SCHEMA = "codex-executor-routing.v1"
 RECEIPT_SCHEMA = "codex-external-execution.v1"
+EXECUTOR_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 
 
 class RoutingError(RuntimeError):
@@ -93,6 +93,7 @@ class SelectionResult:
     native_is_fallback: bool
     selection: str
     invocation: dict[str, Any] | None = None
+    eligible: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +110,7 @@ class SelectionResult:
             "native_is_fallback": self.native_is_fallback,
             "selection": self.selection,
             "invocation": self.invocation,
+            "eligible": list(self.eligible),
         }
 
 
@@ -186,8 +188,12 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
     backend = raw.get("backend")
     if not isinstance(ident, str) or not ident.strip():
         raise RoutingError("executor id is required")
-    if any(char in ident for char in ('"', "\n", "\r", " ")):
-        raise RoutingError("executor id must be a simple token")
+    ident = ident.strip()
+    if not EXECUTOR_ID_RE.fullmatch(ident):
+        raise RoutingError(
+            f"executor id {ident!r} must be a portable token "
+            "[A-Za-z][A-Za-z0-9_-]{0,62} without path separators"
+        )
     if not isinstance(backend, str) or backend not in SUPPORTED_BACKENDS:
         raise RoutingError(
             f"executor {ident!r} backend must be one of: {', '.join(sorted(SUPPORTED_BACKENDS))}"
@@ -224,7 +230,9 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
         backend=backend,
         requested_model=requested.strip(),
         actual_model=actual.strip(),
-        capabilities=frozenset(_string_list(raw.get("capabilities"), f"executor {ident} capabilities")),
+        capabilities=frozenset(
+            _string_list(raw.get("capabilities"), f"executor {ident} capabilities")
+        ),
         tools=frozenset(_string_list(raw.get("tools"), f"executor {ident} tools")),
         cost_preference=cost,
         availability=availability,
@@ -267,16 +275,27 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
     target_id = target.strip() if isinstance(target, str) else None
     if target_id and target_id not in ids:
         raise RoutingError(f"fallback target {target_id!r} is not a configured executor")
+    grok_sources = [item for item in executors if item.backend == BACKEND_GROK]
+    if PERMIT_QUOTA in permit:
+        if not grok_sources:
+            raise RoutingError("quota fallback requires a configured Grok source")
+        if not target_id:
+            raise RoutingError("quota fallback requires a Codex target")
+        target_spec = next(item for item in executors if item.id == target_id)
+        if target_spec.backend != BACKEND_CODEX:
+            raise RoutingError("quota fallback target must be a Codex executor")
+    elif target_id:
+        raise RoutingError('fallback target requires permit = ["quota_exhausted"]')
     if selection == SELECTION_NATIVE_ONLY and not any(
         item.backend == BACKEND_CODEX for item in executors
     ):
         raise RoutingError("native_only requires a Codex backend executor")
     grok_live = any(
         item.backend == BACKEND_GROK and item.availability == AVAIL_CONFIGURED
-        for item in executors
+        for item in grok_sources
     )
     grok_required = grok_live and selection != SELECTION_NATIVE_ONLY
-    native_is_fallback = selection == SELECTION_PAID_STRICT
+    native_is_fallback = bool(PERMIT_QUOTA in permit and grok_sources and target_id)
     return RoutingPolicy(
         selection=selection,
         executors=executors,
@@ -319,15 +338,6 @@ def _availability_block(spec: ExecutorSpec) -> str | None:
     return None
 
 
-def _rank(spec: ExecutorSpec) -> tuple[int, str]:
-    cost_rank = {
-        COST_PAID_INCLUDED: 0,
-        COST_UNKNOWN: 1,
-        COST_METERED: 2,
-    }[spec.cost_preference]
-    return (cost_rank, spec.id)
-
-
 def toml_quoted(value: str, field: str) -> str:
     if not isinstance(value, str) or any(char in value for char in ("\n", "\r", "\0")):
         raise RoutingError(f"{field} is not a TOML-safe string")
@@ -359,6 +369,29 @@ def executor_agent_file(spec: ExecutorSpec, policy: RoutingPolicy) -> str:
     return f"agents/v23-executor-{spec.id}.toml"
 
 
+def is_quota_fallback_target(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
+    return (
+        PERMIT_QUOTA in policy.fallback_permit
+        and policy.fallback_target == spec.id
+        and spec.backend == BACKEND_CODEX
+        and any(item.backend == BACKEND_GROK for item in policy.executors)
+    )
+
+
+def is_fallback_only_role(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
+    if spec.backend != BACKEND_CODEX:
+        return False
+    if policy.legacy:
+        return True
+    if not is_quota_fallback_target(policy, spec):
+        return False
+    if policy.selection == SELECTION_PAID_PREFERRED:
+        return False
+    return not (
+        policy.selection == SELECTION_PAID_STRICT and spec.cost_preference == COST_PAID_INCLUDED
+    )
+
+
 def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
     if spec.backend == BACKEND_GROK:
         return {
@@ -366,36 +399,33 @@ def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
             "agent": None,
             "config_file": "bin/grok-execution.py",
             "model": spec.actual_model,
-            "command": [
-                "python",
-                "${CODEX_HOME}/bin/grok-execution.py",
-                "run",
-                "--cwd",
-                "<absolute-cwd>",
-                "--task-id",
-                "<task-id>",
-                "--owned-path",
-                "<owned-path>",
-                "--prompt-file",
-                "<prompt-file>",
-            ],
+            "how": (
+                "Invoke the installed Grok bridge with Python: "
+                'python "${CODEX_HOME}/bin/grok-execution.py" run --cwd <dir> '
+                "--task-id <id> --owned-path <path> --prompt-file <file>. "
+                "The bridge identity is fixed grok-4.6 / grok-4.6-build."
+            ),
         }
     agent = executor_agent_name(spec, policy)
     return {
-        "kind": "codex_agent",
+        "kind": "codex_subagent",
         "agent": agent,
         "config_file": executor_agent_file(spec, policy),
         "model": spec.actual_model,
-        "command": ["codex", "--profile", "v23-primary"],
-        "spawn": {
-            "name": agent,
-            "model": spec.actual_model,
-            "sandbox_mode": "workspace-write",
-        },
+        "how": (
+            f"Spawn the registered Codex custom agent {agent!r} (not a CLI JSON executable). "
+            "Its installed TOML model must equal this actual_model; re-run install after "
+            "changing local model mappings."
+        ),
     }
 
 
-def _selected(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> SelectionResult:
+def _selected(
+    spec: ExecutorSpec,
+    policy: RoutingPolicy,
+    reason: str,
+    eligible: Sequence[str] = (),
+) -> SelectionResult:
     return SelectionResult(
         status="selected",
         selected_id=spec.id,
@@ -406,13 +436,14 @@ def _selected(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> Selecti
         fallback_authorized=False,
         blocked=None,
         grok_required=policy.grok_required,
-        native_is_fallback=policy.native_is_fallback,
+        native_is_fallback=is_fallback_only_role(policy, spec),
         selection=policy.selection,
         invocation=dispatch_plan(spec, policy),
+        eligible=tuple(eligible),
     )
 
 
-def _blocked(policy: RoutingPolicy, detail: str) -> SelectionResult:
+def _blocked(policy: RoutingPolicy, detail: str, eligible: Sequence[str] = ()) -> SelectionResult:
     return SelectionResult(
         status="blocked",
         selected_id=None,
@@ -426,10 +457,16 @@ def _blocked(policy: RoutingPolicy, detail: str) -> SelectionResult:
         native_is_fallback=policy.native_is_fallback,
         selection=policy.selection,
         invocation=None,
+        eligible=tuple(eligible),
     )
 
 
-def _fallback_result(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> SelectionResult:
+def _fallback_result(
+    spec: ExecutorSpec,
+    policy: RoutingPolicy,
+    reason: str,
+    eligible: Sequence[str] = (),
+) -> SelectionResult:
     return SelectionResult(
         status="fallback",
         selected_id=spec.id,
@@ -440,9 +477,10 @@ def _fallback_result(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> 
         fallback_authorized=True,
         blocked=None,
         grok_required=policy.grok_required,
-        native_is_fallback=policy.native_is_fallback,
+        native_is_fallback=True,
         selection=policy.selection,
         invocation=dispatch_plan(spec, policy),
+        eligible=tuple(eligible),
     )
 
 
@@ -463,6 +501,8 @@ def select_executor(
     capabilities: Sequence[str] = (),
     tools: Sequence[str] = (),
     failure_cause: str | None = None,
+    executor_id: str | None = None,
+    choice_reason: str | None = None,
 ) -> SelectionResult:
     """Choose one configured executor for the stated task needs."""
 
@@ -508,44 +548,81 @@ def select_executor(
 
     eligible = [spec for problem, spec in candidates if problem is None]
     if policy.selection == SELECTION_NATIVE_ONLY:
-        native = [spec for spec in eligible if spec.backend == BACKEND_CODEX]
-        if not native:
-            detail = "; ".join(
-                f"{spec.id}: {problem}" for problem, spec in candidates if spec.backend == BACKEND_CODEX
-            ) or "no Codex executor is configured"
-            return _blocked(policy, f"native_only has no suitable Codex executor ({detail})")
-        chosen = min(native, key=_rank)
+        eligible = [spec for spec in eligible if spec.backend == BACKEND_CODEX]
+    names = tuple(spec.id for spec in eligible)
+    paid = [spec for spec in eligible if spec.cost_preference == COST_PAID_INCLUDED]
+
+    if executor_id:
+        chosen = next((spec for spec in eligible if spec.id == executor_id), None)
+        if chosen is None:
+            return _blocked(
+                policy,
+                f"executor {executor_id!r} is not an eligible candidate for this task",
+                names,
+            )
+        if is_fallback_only_role(policy, chosen):
+            return _blocked(
+                policy,
+                f"executor {chosen.id!r} is quota-fallback-only; use validate-receipt",
+                names,
+            )
+        if policy.selection == SELECTION_PAID_STRICT and chosen not in paid:
+            return _blocked(
+                policy,
+                "paid_strict cannot select a non-paid/included executor without a bound quota receipt",
+                names,
+            )
+        if not isinstance(choice_reason, str) or not choice_reason.strip():
+            return _blocked(
+                policy,
+                "explicit --executor requires a nonempty --reason",
+                names,
+            )
         return _selected(
             chosen,
             policy,
-            f"native_only uses Codex executor {chosen.id} model {chosen.actual_model or 'unmapped'}",
+            f"explicit choice of {chosen.id}: {choice_reason.strip()}",
+            names,
         )
 
-    paid = [spec for spec in eligible if spec.cost_preference == COST_PAID_INCLUDED]
-    pool = paid or eligible
-    if not pool:
-        problems = "; ".join(f"{spec.id}: {problem}" for problem, spec in candidates if problem)
-        if policy.selection == SELECTION_PAID_STRICT:
+    if policy.selection == SELECTION_NATIVE_ONLY:
+        if not eligible:
+            detail = (
+                "; ".join(
+                    f"{spec.id}: {problem}"
+                    for problem, spec in candidates
+                    if spec.backend == BACKEND_CODEX
+                )
+                or "no Codex executor is configured"
+            )
+            return _blocked(policy, f"native_only has no suitable Codex executor ({detail})")
+        pool = eligible
+    else:
+        if policy.selection == SELECTION_PAID_STRICT and not paid:
+            problems = "; ".join(
+                f"{spec.id}: {problem or spec.cost_preference}"
+                for problem, spec in candidates
+                if spec.cost_preference == COST_PAID_INCLUDED or spec.backend == BACKEND_GROK
+            )
             return _blocked(
                 policy,
-                "paid_strict has no suitable paid or included executor: "
-                + (problems or "none configured"),
+                "paid_strict requires a suitable paid/included executor; "
+                + (problems or "none available"),
+                names,
             )
-        return _blocked(policy, "no suitable executor: " + (problems or "none configured"))
+        pool = paid or eligible
+        if not pool:
+            problems = "; ".join(f"{spec.id}: {problem}" for problem, spec in candidates if problem)
+            return _blocked(policy, "no suitable executor: " + (problems or "none configured"))
 
-    if policy.selection == SELECTION_PAID_STRICT and not paid:
-        problems = "; ".join(
-            f"{spec.id}: {problem or spec.cost_preference}"
-            for problem, spec in candidates
-            if spec.cost_preference == COST_PAID_INCLUDED or spec.backend == BACKEND_GROK
-        )
+    if len(pool) != 1:
+        ids = ", ".join(spec.id for spec in pool)
         return _blocked(
             policy,
-            "paid_strict requires a suitable paid/included executor; "
-            + (problems or "none available"),
+            "multiple suitable executors; choose with --executor <id> --reason <why>: " + ids,
+            tuple(spec.id for spec in pool),
         )
-
-    chosen = min(pool, key=_rank)
+    chosen = pool[0]
     preference = (
         "paid/included" if chosen.cost_preference == COST_PAID_INCLUDED else chosen.cost_preference
     )
@@ -553,6 +630,7 @@ def select_executor(
         chosen,
         policy,
         f"{policy.selection} selected {chosen.id} ({preference}, {chosen.backend} {chosen.actual_model})",
+        names,
     )
 
 
@@ -565,11 +643,13 @@ def validate_fallback_receipt(
     owned_paths: Sequence[str],
     capabilities: Sequence[str] = (),
     tools: Sequence[str] = (),
+    source_id: str | None = None,
 ) -> SelectionResult:
     """Authorize native fallback only from a bound quota receipt."""
 
-    if PERMIT_QUOTA not in policy.fallback_permit or not policy.fallback_target:
-        return _blocked(policy, "local routing does not permit quota fallback")
+    grok_sources = [item for item in policy.executors if item.backend == BACKEND_GROK]
+    if not grok_sources or PERMIT_QUOTA not in policy.fallback_permit or not policy.fallback_target:
+        return _blocked(policy, "this policy does not authorize Grok quota fallback")
     if not isinstance(receipt, dict):
         return _blocked(policy, "fallback receipt is not a JSON object")
     if not isinstance(task_id, str) or not task_id.strip():
@@ -591,23 +671,37 @@ def validate_fallback_receipt(
         "task_id": task_id,
         "working_directory": str(cwd),
         "owned_paths": normalized_owned,
+        "requested_model": GROK_REQUESTED_MODEL,
     }
     mismatched = [key for key, value in required.items() if receipt.get(key) != value]
-    requested = receipt.get("requested_model")
-    if requested is not None and requested != GROK_REQUESTED_MODEL:
-        mismatched.append("requested_model")
     actual = receipt.get("actual_model")
     if actual is not None and actual != GROK_ACTUAL_MODEL:
         mismatched.append("actual_model")
-    source = receipt.get("executor_id")
-    grok_ids = {item.id for item in policy.executors if item.backend == BACKEND_GROK}
-    if source is not None and grok_ids and source not in grok_ids:
-        mismatched.append("executor_id")
     if mismatched:
         return _blocked(
             policy,
             "fallback receipt binding mismatch: " + ", ".join(mismatched),
         )
+    usable_sources = [
+        item
+        for item in grok_sources
+        if _capability_match(item, capabilities, tools) is None
+        and _availability_block(item) is None
+    ]
+    if source_id:
+        source = next((item for item in grok_sources if item.id == source_id), None)
+        if source is None or source not in usable_sources:
+            return _blocked(policy, f"source {source_id!r} is not an eligible Grok executor")
+    elif len(usable_sources) == 1:
+        source = usable_sources[0]
+    elif len(usable_sources) > 1:
+        return _blocked(
+            policy,
+            "multiple Grok sources; pass --source <id>: "
+            + ", ".join(item.id for item in usable_sources),
+        )
+    else:
+        return _blocked(policy, "no eligible Grok source for this task")
     target = _by_id(policy, policy.fallback_target)
     mismatch = _capability_match(target, capabilities, tools) or _availability_block(target)
     if mismatch:
@@ -615,18 +709,20 @@ def validate_fallback_receipt(
     return _fallback_result(
         target,
         policy,
-        f"bound quota receipt authorizes fallback to {target.id}",
+        f"bound quota receipt from {source.id} authorizes fallback to {target.id}",
     )
 
 
-def executor_agent_description(policy: RoutingPolicy) -> str:
-    if policy.legacy or policy.selection == SELECTION_PAID_STRICT:
+def executor_agent_description(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
+    if spec is not None and is_fallback_only_role(policy, spec):
+        return "V23 quota-exhaustion-only native execution fallback."
+    if spec is None and policy.legacy:
         return "V23 quota-exhaustion-only native execution fallback."
     return "V23 native implementation executor."
 
 
-def executor_agent_instructions(policy: RoutingPolicy) -> str:
-    if policy.legacy or policy.selection == SELECTION_PAID_STRICT:
+def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
+    if spec is not None and is_fallback_only_role(policy, spec):
         return (
             "You are the native fallback executor for one scoped change. Act only when the\n"
             "parent supplies a verified Grok bridge receipt with status QUOTA_EXHAUSTED and\n"
@@ -641,6 +737,8 @@ def executor_agent_instructions(policy: RoutingPolicy) -> str:
             "action. Primary remains decision-only; do not assign implementation back to\n"
             "primary."
         )
+    if spec is None and policy.legacy:
+        return executor_agent_instructions(policy, default_native_spec(policy))
     if policy.selection == SELECTION_PAID_PREFERRED:
         return (
             "You are a native Codex executor that may be selected initially when you are the\n"
@@ -669,9 +767,10 @@ def render_executor_agent(
     effort: str,
     *,
     name: str = "v23_executor",
+    spec: ExecutorSpec | None = None,
 ) -> str:
-    description = executor_agent_description(policy)
-    instructions = executor_agent_instructions(policy)
+    description = executor_agent_description(policy, spec)
+    instructions = executor_agent_instructions(policy, spec)
     return (
         f"name = {toml_quoted(name, 'agent name')}\n"
         f"description = {toml_quoted(description, 'agent description')}\n"
@@ -679,7 +778,7 @@ def render_executor_agent(
         f"model_reasoning_effort = {toml_quoted(effort, 'agent effort')}\n"
         'sandbox_mode = "workspace-write"\n'
         "\n"
-        "developer_instructions = \"\"\"\n"
+        'developer_instructions = """\n'
         f"{instructions}\n"
         '"""\n'
     )
@@ -696,6 +795,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--capability", action="append", default=[])
     parser.add_argument("--tool", action="append", default=[])
     parser.add_argument("--cause")
+    parser.add_argument("--executor")
+    parser.add_argument("--reason")
+    parser.add_argument("--source")
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--task-id")
     parser.add_argument("--cwd")
@@ -732,6 +834,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 capabilities=args.capability,
                 tools=args.tool,
                 failure_cause=args.cause,
+                executor_id=args.executor,
+                choice_reason=args.reason,
             ).as_dict()
         else:
             if args.receipt is None or not args.task_id or not args.cwd:
@@ -754,9 +858,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 owned_paths=args.owned_path,
                 capabilities=args.capability,
                 tools=args.tool,
+                source_id=args.source,
             ).as_dict()
     except RoutingError as error:
-        print(json.dumps({"schema": SCHEMA, "status": "error", "blocked": str(error)}), file=sys.stderr)
+        print(
+            json.dumps({"schema": SCHEMA, "status": "error", "blocked": str(error)}),
+            file=sys.stderr,
+        )
         return 2
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
