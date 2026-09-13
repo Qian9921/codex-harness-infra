@@ -26,10 +26,26 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from scripts.executor_routing import RoutingError, grok_checks_required, parse_policy
+    from scripts.executor_routing import (
+        BACKEND_CODEX,
+        RoutingError,
+        default_native_spec,
+        executor_agent_file,
+        executor_agent_name,
+        grok_checks_required,
+        parse_policy,
+    )
 except ModuleNotFoundError:  # Installed copy lives beside this hook script.
     try:
-        from executor_routing import RoutingError, grok_checks_required, parse_policy
+        from executor_routing import (
+            BACKEND_CODEX,
+            RoutingError,
+            default_native_spec,
+            executor_agent_file,
+            executor_agent_name,
+            grok_checks_required,
+            parse_policy,
+        )
     except ModuleNotFoundError:  # pragma: no cover - installer always ships the helper.
 
         class RoutingError(RuntimeError):
@@ -40,6 +56,17 @@ except ModuleNotFoundError:  # Installed copy lives beside this hook script.
 
         def grok_checks_required(policy: object) -> bool:
             return True
+
+        BACKEND_CODEX = "codex"
+
+        def default_native_spec(policy: object) -> object:
+            return None
+
+        def executor_agent_name(spec: object, policy: object) -> str:
+            return "v23_executor"
+
+        def executor_agent_file(spec: object, policy: object) -> str:
+            return "agents/v23-executor.toml"
 
 CODEGRAPH_BEGIN = "# BEGIN CODEX-HARNESS-INFRA V23 CODEGRAPH"
 CODEGRAPH_END = "# END CODEX-HARNESS-INFRA V23 CODEGRAPH"
@@ -833,6 +860,8 @@ def local_installation_checks(
     if not any(name == "global_portable" for name, _ok, _detail in checks):
         for kind in ("PORTABLE", "LOCAL"):
             ok, detail = _managed_block(global_text, kind)
+            if kind == "LOCAL" and detail == "absent":
+                ok, detail = True, "optional local greeting"
             checks.append((f"global_{kind.lower()}", ok, str(agents) if ok else detail))
     config_path = codex_home / "config.toml"
     config_text = ""
@@ -918,6 +947,7 @@ def local_installation_checks(
     routing_ok = True
     routing_detail = "legacy grok-preferred"
     require_grok = True
+    policy = None
     try:
         policy = parse_policy(local)
         require_grok = grok_checks_required(policy)
@@ -934,19 +964,28 @@ def local_installation_checks(
         for name, ok, detail in checks:
             if name in {"grok_execution_route", "grok_process_lifecycle"}:
                 rewritten.append(
-                    (name, True, "unrequired for native_only" if not ok else detail)
+                    (name, True, "unrequired for current routing" if not ok else detail)
                 )
             else:
                 rewritten.append((name, ok, detail))
         checks[:] = rewritten
     checks.append(("local_config", configured, str(local_config)))
     opening = local.get("opening", {})
-    opening_ok = (
-        isinstance(opening, dict)
-        and isinstance(opening.get("instruction"), str)
-        and bool(opening["instruction"].strip())
+    if opening is None:
+        opening = {}
+    instruction = opening.get("instruction", "") if isinstance(opening, dict) else None
+    opening_ok = isinstance(opening, dict) and (
+        instruction is None or isinstance(instruction, str)
     )
-    checks.append(("local_opening", opening_ok, "configured outside the repository"))
+    checks.append(
+        (
+            "local_opening",
+            opening_ok,
+            "optional local greeting"
+            if opening_ok and not (isinstance(instruction, str) and instruction.strip())
+            else "configured outside the repository",
+        )
+    )
     if configured and isinstance(models, dict):
         profile_path = codex_home / "v23-primary.config.toml"
         profile = _toml_object(profile_path)
@@ -959,23 +998,44 @@ def local_installation_checks(
         )
         checks.append(("primary_profile", profile_ok, str(profile_path)))
         registered = runtime_config.get("agents", {}) if isinstance(runtime_config, dict) else {}
-        for filename, name, model_key, effort in (
+        native = default_native_spec(policy) if policy is not None else None
+        executor_model = native.actual_model if native is not None else str(models.get("executor"))
+        executor_effort = models.get("executor_effort", DEFAULT_EXECUTOR_EFFORT)
+        for filename, name, expected_model, effort in (
             (
                 "v23-executor.toml",
                 "v23_executor",
-                "executor",
-                models.get("executor_effort", DEFAULT_EXECUTOR_EFFORT),
+                executor_model,
+                executor_effort,
             ),
-            ("v23-reviewer.toml", "v23_reviewer", "reviewer", "high"),
+            ("v23-reviewer.toml", "v23_reviewer", models["reviewer"], "high"),
         ):
             agent_path = codex_home / "agents" / filename
-            ok, detail = _role_file_check(agent_path, name, str(models.get(model_key)), str(effort))
+            ok, detail = _role_file_check(agent_path, name, str(expected_model), str(effort))
             configured_agent = registered.get(name, {}) if isinstance(registered, dict) else {}
             registration_ok = (
                 isinstance(configured_agent, dict)
                 and configured_agent.get("config_file") == f"agents/{filename}"
             )
             checks.append((f"agent_{name}", ok and registration_ok, detail))
+        if policy is not None:
+            for spec in policy.executors:
+                if spec.backend != BACKEND_CODEX:
+                    continue
+                name = executor_agent_name(spec, policy)
+                if name == "v23_executor":
+                    continue
+                rel = executor_agent_file(spec, policy)
+                agent_path = codex_home / rel
+                ok, detail = _role_file_check(
+                    agent_path, name, spec.actual_model, str(executor_effort)
+                )
+                configured_agent = registered.get(name, {}) if isinstance(registered, dict) else {}
+                registration_ok = (
+                    isinstance(configured_agent, dict)
+                    and configured_agent.get("config_file") == rel
+                )
+                checks.append((f"agent_{name}", ok and registration_ok, detail))
     tools = local.get("tools", {})
     if tools is None:
         checks.append(("tools_config", True, "optional tools not configured"))

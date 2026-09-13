@@ -144,22 +144,42 @@ def doctor(
                 local = loaded
         if local:
             github = local.get("github", {})
+            if github is None:
+                github = {}
             if not isinstance(github, dict):
                 checks.append(_result("github_config", False, "[github] is not a TOML table"))
                 github = {}
-            for role in ("author", "reviewer"):
-                ok, detail = _github_login(github.get(f"{role}_config_dir", ""))
-                expected = github.get(f"{role}_login", "")
-                identity_ok = ok and bool(expected) and detail.casefold() == expected.casefold()
-                checks.append(_result(f"github_{role}", identity_ok, detail))
-            author, reviewer = github.get("author_login", ""), github.get("reviewer_login", "")
-            checks.append(
-                _result(
-                    "github_audit_identity_split",
-                    bool(author and reviewer and author.casefold() != reviewer.casefold()),
-                    "same-machine audit identities must differ",
+            configured = any(
+                isinstance(github.get(key), str) and github.get(key, "").strip()
+                for key in (
+                    "author_login",
+                    "author_config_dir",
+                    "reviewer_login",
+                    "reviewer_config_dir",
                 )
             )
+            if not configured:
+                checks.append(
+                    _result(
+                        "github_delivery",
+                        True,
+                        "optional; GitHub identities are not configured",
+                    )
+                )
+            else:
+                for role in ("author", "reviewer"):
+                    ok, detail = _github_login(github.get(f"{role}_config_dir", ""))
+                    expected = github.get(f"{role}_login", "")
+                    identity_ok = ok and bool(expected) and detail.casefold() == expected.casefold()
+                    checks.append(_result(f"github_{role}", identity_ok, detail))
+                author, reviewer = github.get("author_login", ""), github.get("reviewer_login", "")
+                checks.append(
+                    _result(
+                        "github_audit_identity_split",
+                        bool(author and reviewer and author.casefold() != reviewer.casefold()),
+                        "same-machine audit identities must differ",
+                    )
+                )
     return {
         "ok": all(bool(check["ok"]) for check in checks),
         "active_global_instruction": str(effective_global_instruction(codex_home)),

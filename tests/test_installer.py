@@ -229,7 +229,7 @@ instruction = "Local-only opening."
                 install(repo, codex_home, local, root / "state")
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 
-    def test_install_deletes_regular_global_override(self) -> None:
+    def test_install_refuses_unowned_nonempty_global_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, local = self.make_repo(root)
@@ -237,19 +237,17 @@ instruction = "Local-only opening."
             codex_home.mkdir()
             agents = codex_home / "AGENTS.md"
             agents.write_text("Personal rule.\n", encoding="utf-8")
-            (codex_home / "AGENTS.override.md").write_text(
-                "Arbitrary override.\n", encoding="utf-8"
-            )
+            override = codex_home / "AGENTS.override.md"
+            override.write_text("Arbitrary override.\n", encoding="utf-8")
 
-            install(repo, codex_home, local, state_dir)
-            self.assertFalse((codex_home / "AGENTS.override.md").exists())
-            installed = agents.read_text(encoding="utf-8")
-            self.assertIn("Personal rule.", installed)
-            self.assertIn(MARKER, installed)
-            manifest = json.loads((state_dir / "install.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["agents_path"], str(agents))
+            with self.assertRaisesRegex(InstallError, "unowned nonempty AGENTS.override.md"):
+                install(repo, codex_home, local, state_dir)
+            self.assertEqual(override.read_text(encoding="utf-8"), "Arbitrary override.\n")
+            self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
+            self.assertFalse((state_dir / "install.json").exists())
+            self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
 
-    def test_install_unlinks_symlink_override_without_touching_target(self) -> None:
+    def test_install_refuses_symlink_override_without_touching_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, local = self.make_repo(root)
@@ -257,13 +255,14 @@ instruction = "Local-only opening."
             target = root / "personal-override.md"
             target.write_text("Keep this target.\n", encoding="utf-8")
             codex_home.mkdir()
-            (codex_home / "AGENTS.override.md").symlink_to(target)
+            override = codex_home / "AGENTS.override.md"
+            override.symlink_to(target)
 
-            install(repo, codex_home, local, state_dir)
-            self.assertFalse((codex_home / "AGENTS.override.md").exists())
-            self.assertFalse((codex_home / "AGENTS.override.md").is_symlink())
+            with self.assertRaisesRegex(InstallError, "unowned nonempty AGENTS.override.md"):
+                install(repo, codex_home, local, state_dir)
+            self.assertTrue(override.is_symlink())
             self.assertEqual(target.read_text(encoding="utf-8"), "Keep this target.\n")
-            self.assertIn(MARKER, (codex_home / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertFalse((codex_home / "AGENTS.md").exists())
 
     def test_install_refuses_directory_override_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -300,18 +299,11 @@ instruction = "Local-only opening."
             record["agents_path"] = str(override)
             manifest_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 
-            install(repo, codex_home, local, state_dir)
-            self.assertFalse(override.exists())
-            installed = agents.read_text(encoding="utf-8")
-            self.assertIn("Personal rule.", installed)
-            self.assertIn(MARKER, installed)
-            migrated = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(migrated["agents_path"], str(agents))
-
-            uninstall(codex_home, state_dir)
+            with self.assertRaisesRegex(InstallError, "unowned nonempty AGENTS.override.md"):
+                install(repo, codex_home, local, state_dir)
+            self.assertTrue(override.exists())
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
-            self.assertFalse(override.exists())
-            self.assertFalse(manifest_path.exists())
+            self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8"))["agents_path"], str(override))
 
     KNOWN_V21_FIXTURE = (
         "# Codex Governance Infra V21 personal kernel\n"
@@ -438,21 +430,17 @@ instruction = "Local-only opening."
             override = codex_home / "AGENTS.override.md"
             override.write_text("Arbitrary override.\n", encoding="utf-8")
             manifest_path = state_dir / "install.json"
-            install_mod._injected_atomic_write_failure = manifest_path
-            try:
-                with self.assertRaises(OSError):
-                    install(repo, codex_home, local, state_dir)
-            finally:
-                install_mod._injected_atomic_write_failure = None
+            with self.assertRaisesRegex(InstallError, "unowned nonempty AGENTS.override.md"):
+                install(repo, codex_home, local, state_dir)
             self.assertTrue(override.is_file())
             self.assertEqual(override.read_text(encoding="utf-8"), "Arbitrary override.\n")
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
             self.assertFalse(manifest_path.exists())
             self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
-            self.assertFalse((codex_home / "bin/grok-execution.py").exists())
-
+            override.write_text("", encoding="utf-8")
             install(repo, codex_home, local, state_dir)
-            self.assertFalse(override.exists())
+            self.assertTrue(override.is_file())
+            self.assertEqual(override.read_text(encoding="utf-8"), "")
             self.assertIn(MARKER, agents.read_text(encoding="utf-8"))
             self.assertTrue(manifest_path.is_file())
 
@@ -477,12 +465,8 @@ instruction = "Local-only opening."
             manifest_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
             restored_manifest = manifest_path.read_text(encoding="utf-8")
 
-            install_mod._injected_atomic_write_failure = manifest_path
-            try:
-                with self.assertRaises(OSError):
-                    install(repo, codex_home, local, state_dir)
-            finally:
-                install_mod._injected_atomic_write_failure = None
+            with self.assertRaisesRegex(InstallError, "unowned nonempty AGENTS.override.md"):
+                install(repo, codex_home, local, state_dir)
             self.assertTrue(override.is_file())
             self.assertEqual(override.read_text(encoding="utf-8"), previous_agents)
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
@@ -490,13 +474,6 @@ instruction = "Local-only opening."
             self.assertEqual(
                 (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8"),
                 previous_executor,
-            )
-
-            install(repo, codex_home, local, state_dir)
-            self.assertFalse(override.exists())
-            self.assertEqual(
-                json.loads(manifest_path.read_text(encoding="utf-8"))["agents_path"],
-                str(agents),
             )
 
     def test_install_refuses_symlink_target(self) -> None:
@@ -732,6 +709,97 @@ availability = "configured"
             self.assertTrue(agents.exists())
             self.assertIn("Personal rule.", agents.read_text(encoding="utf-8"))
             self.assertFalse((codex_home / "bin/executor-routing.py").exists())
+
+    def test_blank_opening_without_github_installs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "native-slug"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home, state_dir = root / "codex", root / "state"
+            install(ROOT, codex_home, local, state_dir)
+            agents = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn(MARKER, agents)
+            self.assertNotIn("Local-only opening", agents)
+            executor = tomllib.loads((codex_home / "agents/v23-executor.toml").read_text())
+            self.assertEqual(executor["model"], "native-slug")
+            self.assertIn("native_only", executor["developer_instructions"])
+
+    def test_selected_candidate_model_is_installed_on_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "default-native"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "fast"
+backend = "codex"
+actual_model = "different-model"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            from scripts.executor_routing import parse_policy, select_executor
+
+            policy = parse_policy(tomllib.loads(local.read_text(encoding="utf-8")))
+            result = select_executor(
+                policy, capabilities=("implementation",), tools=("workspace-write",)
+            )
+            self.assertEqual(result.actual_model, "different-model")
+            role_path = codex_home / result.invocation["config_file"]
+            agent = tomllib.loads(role_path.read_text(encoding="utf-8"))
+            self.assertEqual(agent["model"], "different-model")
+            self.assertEqual(agent["name"], result.invocation["agent"])
+            registered = tomllib.loads((codex_home / "config.toml").read_text())["agents"]
+            self.assertEqual(
+                registered[result.invocation["agent"]]["config_file"],
+                result.invocation["config_file"],
+            )
 
 
 if __name__ == "__main__":

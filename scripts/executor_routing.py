@@ -92,6 +92,7 @@ class SelectionResult:
     grok_required: bool
     native_is_fallback: bool
     selection: str
+    invocation: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +108,7 @@ class SelectionResult:
             "grok_required": self.grok_required,
             "native_is_fallback": self.native_is_fallback,
             "selection": self.selection,
+            "invocation": self.invocation,
         }
 
 
@@ -184,6 +186,8 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
     backend = raw.get("backend")
     if not isinstance(ident, str) or not ident.strip():
         raise RoutingError("executor id is required")
+    if any(char in ident for char in ('"', "\n", "\r", " ")):
+        raise RoutingError("executor id must be a simple token")
     if not isinstance(backend, str) or backend not in SUPPORTED_BACKENDS:
         raise RoutingError(
             f"executor {ident!r} backend must be one of: {', '.join(sorted(SUPPORTED_BACKENDS))}"
@@ -209,6 +213,12 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
     if backend == BACKEND_GROK:
         requested = requested.strip() or GROK_REQUESTED_MODEL
         actual = actual.strip() or GROK_ACTUAL_MODEL
+        if requested != GROK_REQUESTED_MODEL or actual != GROK_ACTUAL_MODEL:
+            raise RoutingError(
+                f"executor {ident.strip()!r} uses unsupported Grok identity "
+                f"{requested}/{actual}; the bridge is fixed "
+                f"{GROK_REQUESTED_MODEL}/{GROK_ACTUAL_MODEL}"
+            )
     return ExecutorSpec(
         id=ident.strip(),
         backend=backend,
@@ -257,14 +267,16 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
     target_id = target.strip() if isinstance(target, str) else None
     if target_id and target_id not in ids:
         raise RoutingError(f"fallback target {target_id!r} is not a configured executor")
-    grok_required = any(item.backend == BACKEND_GROK for item in executors) and selection != (
-        SELECTION_NATIVE_ONLY
+    if selection == SELECTION_NATIVE_ONLY and not any(
+        item.backend == BACKEND_CODEX for item in executors
+    ):
+        raise RoutingError("native_only requires a Codex backend executor")
+    grok_live = any(
+        item.backend == BACKEND_GROK and item.availability == AVAIL_CONFIGURED
+        for item in executors
     )
-    if selection == SELECTION_NATIVE_ONLY:
-        grok_required = False
-        if not any(item.backend == BACKEND_CODEX for item in executors):
-            raise RoutingError("native_only requires a Codex backend executor")
-    native_is_fallback = selection != SELECTION_NATIVE_ONLY and bool(permit)
+    grok_required = grok_live and selection != SELECTION_NATIVE_ONLY
+    native_is_fallback = selection == SELECTION_PAID_STRICT
     return RoutingPolicy(
         selection=selection,
         executors=executors,
@@ -316,6 +328,73 @@ def _rank(spec: ExecutorSpec) -> tuple[int, str]:
     return (cost_rank, spec.id)
 
 
+def toml_quoted(value: str, field: str) -> str:
+    if not isinstance(value, str) or any(char in value for char in ("\n", "\r", "\0")):
+        raise RoutingError(f"{field} is not a TOML-safe string")
+    return json.dumps(value)
+
+
+def default_native_spec(policy: RoutingPolicy) -> ExecutorSpec | None:
+    if policy.fallback_target:
+        for item in policy.executors:
+            if item.id == policy.fallback_target and item.backend == BACKEND_CODEX:
+                return item
+    for item in policy.executors:
+        if item.backend == BACKEND_CODEX:
+            return item
+    return None
+
+
+def executor_agent_name(spec: ExecutorSpec, policy: RoutingPolicy) -> str:
+    default = default_native_spec(policy)
+    if default is not None and spec.id == default.id:
+        return "v23_executor"
+    return f"v23_executor_{spec.id}"
+
+
+def executor_agent_file(spec: ExecutorSpec, policy: RoutingPolicy) -> str:
+    name = executor_agent_name(spec, policy)
+    if name == "v23_executor":
+        return "agents/v23-executor.toml"
+    return f"agents/v23-executor-{spec.id}.toml"
+
+
+def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
+    if spec.backend == BACKEND_GROK:
+        return {
+            "kind": "grok_bridge",
+            "agent": None,
+            "config_file": "bin/grok-execution.py",
+            "model": spec.actual_model,
+            "command": [
+                "python",
+                "${CODEX_HOME}/bin/grok-execution.py",
+                "run",
+                "--cwd",
+                "<absolute-cwd>",
+                "--task-id",
+                "<task-id>",
+                "--owned-path",
+                "<owned-path>",
+                "--prompt-file",
+                "<prompt-file>",
+            ],
+        }
+    agent = executor_agent_name(spec, policy)
+    return {
+        "kind": "codex_agent",
+        "agent": agent,
+        "config_file": executor_agent_file(spec, policy),
+        "model": spec.actual_model,
+        "command": ["codex", "--profile", "v23-primary"],
+        "spawn": {
+            "name": agent,
+            "model": spec.actual_model,
+            "sandbox_mode": "workspace-write",
+        },
+    }
+
+
 def _selected(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> SelectionResult:
     return SelectionResult(
         status="selected",
@@ -329,6 +408,7 @@ def _selected(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> Selecti
         grok_required=policy.grok_required,
         native_is_fallback=policy.native_is_fallback,
         selection=policy.selection,
+        invocation=dispatch_plan(spec, policy),
     )
 
 
@@ -345,6 +425,7 @@ def _blocked(policy: RoutingPolicy, detail: str) -> SelectionResult:
         grok_required=policy.grok_required,
         native_is_fallback=policy.native_is_fallback,
         selection=policy.selection,
+        invocation=None,
     )
 
 
@@ -361,6 +442,7 @@ def _fallback_result(spec: ExecutorSpec, policy: RoutingPolicy, reason: str) -> 
         grok_required=policy.grok_required,
         native_is_fallback=policy.native_is_fallback,
         selection=policy.selection,
+        invocation=dispatch_plan(spec, policy),
     )
 
 
@@ -401,10 +483,21 @@ def select_executor(
         )
 
     cause = classify_failure_cause(failure_cause)
-    if cause in GENERIC_FAILURE_CAUSES:
+    if cause is not None:
+        if cause == PERMIT_QUOTA:
+            return _blocked(
+                policy,
+                "quota fallback requires validate-receipt with a bound receipt; "
+                "a failure-cause string is not authorization",
+            )
+        if cause in GENERIC_FAILURE_CAUSES:
+            return _blocked(
+                policy,
+                f"{cause} is not a quota receipt and does not authorize fallback",
+            )
         return _blocked(
             policy,
-            f"{cause} is not a quota receipt and does not authorize fallback",
+            f"unknown failure {cause!r} does not authorize fallback or restart selection",
         )
 
     candidates: list[tuple[str | None, ExecutorSpec]] = []
@@ -430,28 +523,14 @@ def select_executor(
 
     paid = [spec for spec in eligible if spec.cost_preference == COST_PAID_INCLUDED]
     pool = paid or eligible
-    if cause == PERMIT_QUOTA:
-        if PERMIT_QUOTA not in policy.fallback_permit or not policy.fallback_target:
-            return _blocked(policy, "quota fallback is not permitted by local routing")
-        target = _by_id(policy, policy.fallback_target)
-        mismatch = _capability_match(target, capabilities, tools) or _availability_block(target)
-        if mismatch:
-            return _blocked(policy, f"fallback target {target.id} is not usable: {mismatch}")
-        return _fallback_result(
-            target,
-            policy,
-            f"explicit quota receipt authorizes fallback to {target.id}",
-        )
     if not pool:
         problems = "; ".join(f"{spec.id}: {problem}" for problem, spec in candidates if problem)
         if policy.selection == SELECTION_PAID_STRICT:
             return _blocked(
                 policy,
-                "paid_strict has no suitable paid or included executor: " + (problems or "none configured"),
+                "paid_strict has no suitable paid or included executor: "
+                + (problems or "none configured"),
             )
-        if PERMIT_QUOTA in policy.fallback_permit and policy.fallback_target and cause == PERMIT_QUOTA:
-            target = _by_id(policy, policy.fallback_target)
-            return _fallback_result(target, policy, "configured fallback after paid executor unusable")
         return _blocked(policy, "no suitable executor: " + (problems or "none configured"))
 
     if policy.selection == SELECTION_PAID_STRICT and not paid:
@@ -484,41 +563,70 @@ def validate_fallback_receipt(
     task_id: str,
     working_directory: str,
     owned_paths: Sequence[str],
+    capabilities: Sequence[str] = (),
+    tools: Sequence[str] = (),
 ) -> SelectionResult:
     """Authorize native fallback only from a bound quota receipt."""
 
     if PERMIT_QUOTA not in policy.fallback_permit or not policy.fallback_target:
         return _blocked(policy, "local routing does not permit quota fallback")
+    if not isinstance(receipt, dict):
+        return _blocked(policy, "fallback receipt is not a JSON object")
+    if not isinstance(task_id, str) or not task_id.strip():
+        return _blocked(policy, "task-id is required and must be nonempty")
+    cwd = Path(working_directory)
+    if not cwd.is_absolute():
+        return _blocked(policy, "working_directory must be an absolute path")
+    if not owned_paths:
+        return _blocked(policy, "at least one owned-path is required")
+    normalized_owned = [str(Path(item)) for item in owned_paths]
+    if any(not Path(item).is_absolute() for item in normalized_owned):
+        return _blocked(policy, "owned paths must be absolute")
+    if len(normalized_owned) != len(set(normalized_owned)):
+        return _blocked(policy, "owned paths must be unique")
     required = {
         "schema": RECEIPT_SCHEMA,
         "status": "QUOTA_EXHAUSTED",
         "fallback_reason": "grok_quota_exhausted",
         "task_id": task_id,
-        "working_directory": working_directory,
-        "owned_paths": list(owned_paths),
+        "working_directory": str(cwd),
+        "owned_paths": normalized_owned,
     }
     mismatched = [key for key, value in required.items() if receipt.get(key) != value]
+    requested = receipt.get("requested_model")
+    if requested is not None and requested != GROK_REQUESTED_MODEL:
+        mismatched.append("requested_model")
+    actual = receipt.get("actual_model")
+    if actual is not None and actual != GROK_ACTUAL_MODEL:
+        mismatched.append("actual_model")
+    source = receipt.get("executor_id")
+    grok_ids = {item.id for item in policy.executors if item.backend == BACKEND_GROK}
+    if source is not None and grok_ids and source not in grok_ids:
+        mismatched.append("executor_id")
     if mismatched:
         return _blocked(
             policy,
             "fallback receipt binding mismatch: " + ", ".join(mismatched),
         )
-    return select_executor(
+    target = _by_id(policy, policy.fallback_target)
+    mismatch = _capability_match(target, capabilities, tools) or _availability_block(target)
+    if mismatch:
+        return _blocked(policy, f"fallback target {target.id} is not usable: {mismatch}")
+    return _fallback_result(
+        target,
         policy,
-        capabilities=("implementation",),
-        tools=(),
-        failure_cause=PERMIT_QUOTA,
+        f"bound quota receipt authorizes fallback to {target.id}",
     )
 
 
 def executor_agent_description(policy: RoutingPolicy) -> str:
-    if policy.native_is_fallback:
+    if policy.legacy or policy.selection == SELECTION_PAID_STRICT:
         return "V23 quota-exhaustion-only native execution fallback."
     return "V23 native implementation executor."
 
 
 def executor_agent_instructions(policy: RoutingPolicy) -> str:
-    if policy.native_is_fallback:
+    if policy.legacy or policy.selection == SELECTION_PAID_STRICT:
         return (
             "You are the native fallback executor for one scoped change. Act only when the\n"
             "parent supplies a verified Grok bridge receipt with status QUOTA_EXHAUSTED and\n"
@@ -533,6 +641,16 @@ def executor_agent_instructions(policy: RoutingPolicy) -> str:
             "action. Primary remains decision-only; do not assign implementation back to\n"
             "primary."
         )
+    if policy.selection == SELECTION_PAID_PREFERRED:
+        return (
+            "You are a native Codex executor that may be selected initially when you are the\n"
+            "capability-fit candidate, including when a paid Grok candidate is unavailable.\n"
+            "That initial selection is not a quota fallback. After a Grok attempt, switch to\n"
+            "this agent only with a bound QUOTA_EXHAUSTED receipt; network, auth, timeout,\n"
+            "and bridge errors are not quota. Make the smallest complete change, keep one\n"
+            "writer per worktree, and leave concise test evidence. Primary remains\n"
+            "decision-only; do not assign implementation back to primary."
+        )
     return (
         "You are the native implementation executor for one scoped change. This\n"
         "native_only route is complete: Grok is not required and no quota receipt is\n"
@@ -545,14 +663,20 @@ def executor_agent_instructions(policy: RoutingPolicy) -> str:
     )
 
 
-def render_executor_agent(policy: RoutingPolicy, model: str, effort: str) -> str:
+def render_executor_agent(
+    policy: RoutingPolicy,
+    model: str,
+    effort: str,
+    *,
+    name: str = "v23_executor",
+) -> str:
     description = executor_agent_description(policy)
     instructions = executor_agent_instructions(policy)
     return (
-        'name = "v23_executor"\n'
-        f'description = "{description}"\n'
-        f'model = "{model}"\n'
-        f'model_reasoning_effort = "{effort}"\n'
+        f"name = {toml_quoted(name, 'agent name')}\n"
+        f"description = {toml_quoted(description, 'agent description')}\n"
+        f"model = {toml_quoted(model, 'agent model')}\n"
+        f"model_reasoning_effort = {toml_quoted(effort, 'agent effort')}\n"
         'sandbox_mode = "workspace-write"\n'
         "\n"
         "developer_instructions = \"\"\"\n"
@@ -612,7 +736,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             if args.receipt is None or not args.task_id or not args.cwd:
                 raise RoutingError("validate-receipt requires --receipt, --task-id, and --cwd")
-            receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
+            try:
+                receipt = json.loads(args.receipt.read_text(encoding="utf-8"))
+            except FileNotFoundError as exc:
+                raise RoutingError(f"receipt file is missing: {args.receipt}") from exc
+            except OSError as exc:
+                raise RoutingError(f"receipt file is unreadable: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise RoutingError(f"malformed receipt JSON: {exc.msg}") from exc
             if not isinstance(receipt, dict):
                 raise RoutingError("receipt is not a JSON object")
             payload = validate_fallback_receipt(
@@ -621,6 +752,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 task_id=args.task_id,
                 working_directory=args.cwd,
                 owned_paths=args.owned_path,
+                capabilities=args.capability,
+                tools=args.tool,
             ).as_dict()
     except RoutingError as error:
         print(json.dumps({"schema": SCHEMA, "status": "error", "blocked": str(error)}), file=sys.stderr)
