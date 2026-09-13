@@ -17,6 +17,7 @@ from scripts.task_bootstrap import (
     CODEGRAPH_BEGIN,
     CODEGRAPH_TIMEOUT_SECONDS,
     GIT_DISCOVERY_TIMEOUT_SECONDS,
+    HOOK_TIMEOUT_OVERHEAD_SECONDS,
     HOOK_TIMEOUT_SECONDS,
     LIVE_PROBE_TIMEOUT_SECONDS,
     LIVE_STATE_CONTEXT_CAP,
@@ -209,8 +210,9 @@ class TaskBootstrapTests(unittest.TestCase):
     def test_hook_timeout_budget_covers_live_runtime_only(self) -> None:
         self.assertGreaterEqual(SEMBLE_TIMEOUT_SECONDS, 36)
         self.assertGreaterEqual(LIVE_PROBE_TIMEOUT_SECONDS, 12)
-        self.assertLessEqual(LIVE_PROBE_TIMEOUT_SECONDS + 10, HOOK_TIMEOUT_SECONDS)
-        self.assertLess(HOOK_TIMEOUT_SECONDS, 40)
+        self.assertEqual(HOOK_TIMEOUT_SECONDS, HOOK_TIMEOUT_OVERHEAD_SECONDS)
+        self.assertLess(HOOK_TIMEOUT_SECONDS, 15)
+        self.assertGreater(LIVE_PROBE_TIMEOUT_SECONDS, HOOK_TIMEOUT_SECONDS)
         probe_budget = (
             GIT_DISCOVERY_TIMEOUT_SECONDS * 2
             + CODEGRAPH_TIMEOUT_SECONDS * 4
@@ -271,6 +273,7 @@ class TaskBootstrapTests(unittest.TestCase):
                 codex_home=root / "codex",
                 state_dir=root / "state",
                 runner=FakeRunner(root, timeout_daemon_version=True),
+                probe_daemons=True,
             )
             error_fields = collect_live_runtime_state(
                 cwd=root,
@@ -278,6 +281,7 @@ class TaskBootstrapTests(unittest.TestCase):
                 codex_home=root / "codex",
                 state_dir=root / "state",
                 runner=FakeRunner(root, daemon_version_fail=True),
+                probe_daemons=True,
             )
             timeout_map = {field.name: field for field in timeout_fields}
             error_map = {field.name: field for field in error_fields}
@@ -378,6 +382,8 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertIn("must not block", context)
             self.assertIn("V23 live runtime state", context)
             self.assertIn("memory of prior tasks is historical only", context)
+            self.assertIn("daemon_probes=skipped", context)
+            self.assertNotIn("cli_version=", context)
             self.assertNotIn("ignored", context)
             json.dumps(payload)
 
@@ -504,7 +510,9 @@ rtk = "rtk"
                 probe_required_tools=False,
             )
             doctor_names = [check["name"] for check in report["checks"]]
-            self.assertEqual(local_names, doctor_names)
+            extra = {"installed_skills", "runtime_python", "github_delivery"}
+            self.assertTrue(set(local_names).issubset(set(doctor_names)))
+            self.assertTrue(extra.intersection(set(doctor_names)))
 
     def test_instruction_state_permission_error_keeps_all_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

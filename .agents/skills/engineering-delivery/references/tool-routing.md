@@ -1,7 +1,8 @@
 # Tool routing
 
-The native UserPromptSubmit hook injects installed instructions and live
-runtime checks. It is the only V23 hook and is never a Stop hook. CodeGraph,
+The native UserPromptSubmit hook injects installed instructions and local
+integrity checks. Daemon, CodeGraph, Semble, and RTK probes are explicit or
+task-relevant. It is the only V23 hook and is never a Stop hook. CodeGraph,
 Semble, and RTK are task-relevant; explicit Doctor/`probe_tools` checks remain
 usable. A tool failure must not block unrelated work.
 

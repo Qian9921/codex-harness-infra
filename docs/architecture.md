@@ -12,7 +12,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Workflow agreement
 
-`WORKFLOW.md` defines the three work kinds and the authorized repository delivery path. It makes the difference between discussing a change, writing locally, writing to GitHub, and taking an irreversible external action explicit.
+`WORKFLOW.md` defines the three work kinds and the local `[delivery]` policy (`local_only`, `pull_request`, `merge_if_ready` plus explicit repositories). Installing or configuring credentials is not publication permission. Current user instructions override installed defaults.
 
 ### On-demand guidance
 
@@ -20,7 +20,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Small helpers and one native task hook
 
-`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, `scripts/bounded_search.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, live runtime-state injection, Harness-default bounded search, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that injects installed instructions and live runtime checks. Live runtime state is collected from `${CODEX_HOME}/harness/v23-state/install.json` and daemon/CLI probes; prior-task memory is historical only. Doctor summarizes the live installation, may probe CodeGraph/Semble/RTK on request, and does not re-enter the full task hook. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
+`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, `scripts/bounded_search.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, live runtime-state injection, Harness-default bounded search, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that injects installed instructions and local integrity checks. Live runtime state is collected from `${CODEX_HOME}/harness/v23-state/install.json` and instruction/config files; daemon/CLI and CodeGraph/Semble/RTK probes are explicit Doctor flags. Prior-task memory is historical only. Doctor summarizes the live installation and does not re-enter the full task hook. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
 
 ## Work and capability
 
@@ -37,7 +37,7 @@ An authorized repository change does not authorize unrelated external actions.
 
 ## Roles and delegation
 
-`primary` owns the request, scope, decisions, repository state, verification, and final communication and stays decision-only when an executor is configured. Implementation uses local executor routing (`scripts/executor_routing.py`): `native_only` is a complete Codex path; paid-aware modes prefer a configured paid/included executor; configs without `[routing]` keep Grok-preferred execution via `$grok-execution` with quota-only native fallback. When Grok is selected: one bounded implement/test/fix task, then targeted independent verification. `run` and `resume` wait without a wall-clock timeout while the dedicated Grok process group is genuinely alive and not a zombie. Dedicated-PGID cleanup uses a spawn-issued token (`start_new_session=True`), registry lock, SIGTERM/SIGHUP/SIGINT coordination, and SIGKILL of remaining members on every normal return and BaseException path; see `.agents/skills/grok-execution/references/grok-process-lifecycle.md`. All Codex Grok `run`/`resume` invocations MUST be supervised by a separately spawned generic Luna-low native subagent, distinct from `v23_executor`. That supervisor watches lifecycle and receipt only and never edits. The parent waits for the supervisor completion event and does not directly narrate or poll Grok. `v23_executor` remains the quota-exhaustion-only fallback and is not the supervisor. `reviewer` receives a fresh read-only context containing the request, current diff, relevant evidence, and current head SHA. Empty structured `request_user_input` answers stay unanswered and paused.
+`primary` is decision-only: request, scope, routing, targeted read-only acceptance, and final communication. Primary never edits files and never performs mechanical execution. Implementation uses local executor routing (`scripts/executor_routing.py`); `native_only` is a complete Codex path. If the selected route is unavailable, repair routing rather than assigning writes to primary. Selected-backend identity, supervision, and receipts load only from that backend's skill. `reviewer` receives a fresh read-only context containing the request, current diff, relevant evidence, and current head SHA. Empty structured `request_user_input` answers stay unanswered and paused.
 
 Independent read-heavy work can run in parallel. A worktree has one writer. Parallel writers require isolated worktrees and explicit file ownership. Delegation is complete only when it returns a concrete result, evidence, diff, or blocker.
 
@@ -45,7 +45,7 @@ Independent read-heavy work can run in parallel. A worktree has one writer. Para
 
 - Keep the permanent context short and load detail progressively.
 - Prefer one coherent change that a reviewer can understand in one sitting.
-- Keep the single native prompt hook for installed instructions and live runtime checks; use CodeGraph, Semble, and RTK when they are task-relevant, and keep explicit Doctor probes.
+- Keep the single native prompt hook for installed instructions and local integrity checks; use CodeGraph, Semble, RTK, and daemon probes when they are task-relevant or explicitly requested.
 - Use project-native tools and checks before adding a new dependency.
 - Add a mechanism only when a concrete failure is identified and the existing mechanism cannot address it with less complexity.
 - Preserve user-authored local state outside the marked ownership boundary.

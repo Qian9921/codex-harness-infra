@@ -20,10 +20,26 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+try:
+    from scripts.delivery_policy import (
+        DeliveryError,
+        DeliveryPolicy,
+        assert_publication_allowed,
+        parse_delivery,
+    )
+except ModuleNotFoundError:
+    from delivery_policy import (  # type: ignore[no-redef]
+        DeliveryError,
+        DeliveryPolicy,
+        assert_publication_allowed,
+        parse_delivery,
+    )
 
 
 class FlowError(RuntimeError):
@@ -345,12 +361,22 @@ class DeliveryFlow:
         expected_author: str,
         expected_reviewer: str,
         git_runner: Runner | None = None,
+        delivery: DeliveryPolicy | None = None,
     ) -> None:
         self.author = author
         self.reviewer = reviewer
         self.expected_author = expected_author
         self.expected_reviewer = expected_reviewer
         self._git_runner = git_runner or _system_runner
+        self.delivery = delivery
+
+    def _require_delivery(self, repo: str, action: str) -> None:
+        if self.delivery is None:
+            return
+        try:
+            assert_publication_allowed(self.delivery, repo, action)
+        except DeliveryError as error:
+            raise FlowError(str(error)) from error
 
     def preflight(self) -> tuple[str, str]:
         author, reviewer = self.author.login(), self.reviewer.login()
@@ -363,6 +389,7 @@ class DeliveryFlow:
         return author, reviewer
 
     def publish_review(self, repo: str, number: int, verdict: ReviewVerdict) -> None:
+        self._require_delivery(repo, "publish-review")
         self.preflight()
         self.reviewer.submit_review(repo, number, verdict)
 
@@ -375,6 +402,10 @@ class DeliveryFlow:
             raise FlowError("remote and refspec are required for an author push")
         env = self.author.environment()
         remote_url = self._author_push_url(workdir, remote)
+        parsed = urlsplit(remote_url)
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 2:
+            self._require_delivery(f"{parts[0]}/{parts[1].removesuffix('.git')}", "push")
         command = [
             "git",
             "-C",
@@ -475,6 +506,7 @@ class DeliveryFlow:
         return "credential.https://github.com.helper"
 
     def merge_if_ready(self, repo: str, number: int, reviewed_sha: str) -> None:
+        self._require_delivery(repo, "merge")
         _author, reviewer = self.preflight()
         current = self.author.current_head(repo, number)
         if current != reviewed_sha:
@@ -524,14 +556,30 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument("--body", default="Independent current-head review.")
     parser.add_argument("--body-file", type=Path)
+    parser.add_argument(
+        "--local-config",
+        type=Path,
+        help="local Harness config; required for GitHub publication commands",
+    )
     args = parser.parse_args(argv)
     if args.body_file is not None:
         args.body = args.body_file.read_text(encoding="utf-8")
+    delivery = None
+    mutating = args.command in {"push", "ensure-pr", "publish-review", "merge"}
+    if mutating:
+        if args.local_config is None:
+            raise SystemExit("error: --local-config is required for GitHub publication")
+        try:
+            delivery = parse_delivery(tomllib.loads(args.local_config.read_text(encoding="utf-8")))
+        except (OSError, DeliveryError, tomllib.TOMLDecodeError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
     flow = DeliveryFlow(
         GHClient(args.author_config),
         GHClient(args.reviewer_config),
         args.author_login,
         args.reviewer_login,
+        delivery=delivery,
     )
     try:
         if args.command == "preflight":
@@ -543,6 +591,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         elif args.command == "ensure-pr":
             if not (args.repo and args.branch and args.base and args.title):
                 raise FlowError("--repo, --branch, --base, and --title are required")
+            flow._require_delivery(args.repo, "ensure-pr")
             flow.preflight()
             print(
                 json.dumps(

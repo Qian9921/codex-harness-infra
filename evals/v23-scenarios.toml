@@ -12,14 +12,14 @@ test = "tests.test_evaluate.HarnessScenarioEvals.test_discuss_is_read_only"
 id = "normal-change-default-delivery"
 dimension = "policy"
 prompt = "Fix a normal repository defect."
-expected = "A normal repository change defaults to the GitHub delivery path."
+expected = "Publication follows explicit [delivery]; omitted table is local_only."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_normal_change_defaults_to_delivery"
 
 [[scenario]]
 id = "local-only-opt-out"
 dimension = "policy"
 prompt = "Make this change locally only."
-expected = "Local-only work is an explicit opt-out, not the default."
+expected = "local_only is the portable default; GitHub modes need repositories."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_local_only_is_an_explicit_opt_out"
 
 [[scenario]]

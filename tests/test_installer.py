@@ -55,6 +55,10 @@ class InstallerTests(unittest.TestCase):
         (repo / "scripts/bounded_search.py").write_text("print('search')\n", encoding="utf-8")
         (repo / "scripts/executor_routing.py").write_text("print('routing')\n", encoding="utf-8")
         (repo / "scripts/runtime.py").write_text("print('runtime')\n", encoding="utf-8")
+        (repo / "scripts/delivery_policy.py").write_text(
+            (ROOT / "scripts/delivery_policy.py").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         skill = repo / ".agents/skills/engineering-delivery"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(

@@ -21,8 +21,8 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 可移植角色为 `primary`、`executor` 和 `reviewer`：
 
-- `primary` 负责需求、范围、决策和最终沟通；配置了 executor 时不承担实现。
-- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径；付费感知模式优先已配置的 paid/included executor；省略 `[routing]` 时保持 Grok 优先与仅配额耗尽的 native fallback。
+- `primary` 只做决策与只读验收，永不改文件，也不做机械执行。执行器不可用时修复路由，禁止把实现交回 primary。
+- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径。后端身份与 receipt 只从选中 backend 的 skill 加载。
 - `reviewer` 使用新上下文，以只读方式审查当前变更。
 
 本机安装会把 primary、executor 和 reviewer 映射到该机器可用的模型和工具。Native 模型 slug、账号映射、凭据、开场指令和绝对路径仍属于本机配置。共享策略使用逻辑 executor ID 与 backend，不写入当前 native 版本号。
@@ -44,12 +44,7 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 
 ## 交付
 
-讨论任务保持只读。经过授权的仓库修改按以下流程进行：
-
-```text
-理解 → 实现 → 验证 → commit → push → Pull Request
-    → 独立 Review → 反馈/修改 → approval → merge
-```
+讨论任务保持只读。发布遵循明确的 `[delivery]`（默认 `local_only`，或 `pull_request` / `merge_if_ready` 加授权仓库）。当前用户对指定仓库的明确 PR 请求可用仅含 `[delivery]` 的临时 `--local-config` 覆盖 standing `local_only`，全程复用同一文件并在交付后删除，不改持久文件。安装或配置凭据不是发布授权。
 
 作者和 Reviewer 在同一台机器上使用不同的 GitHub 身份。这是审计与工作流边界，不宣称进程或凭据隔离。GitHub Pull Request、当前 head、检查、评论和 Review 是交付的持久记录。
 
@@ -57,11 +52,11 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 
 ## 安装边界
 
-安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于注入已安装说明和有界运行时状态（来自 `install.json` 与现场 daemon 探针，而不是任务记忆）。CodeGraph、Semble、RTK 按任务相关性使用，Doctor 仍可显式探测。不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
+安装器只修改明确拥有的文件和标记区块，保留无关的个人配置、工具、凭据和用户规则。目标文件已有用户内容但没有 ownership marker 时不得覆盖。它只安装一个 UserPromptSubmit hook，用于注入已安装说明和本地完整性检查（`install.json` 与指令/配置）。CodeGraph、Semble、RTK 与 daemon 探针需显式 Doctor 或任务相关。不安装 Stop hook、后台服务、daemon 或项目跟踪的 index。卸载时只删除本项目拥有的内容。
 
 ## 本机启用
 
-将 `package/local.example.toml` 复制到仓库外的本机路径，填写模型、开场指令、GitHub、Python runtime 和工具字段，然后运行 `python scripts/install.py install --local-config <local-file>`。建议本机映射：primary `gpt-6-astra` high、reviewer `gpt-5.6-sol`、Luna low fallback。在 Codex 的 hook browser 中一次性 review 并 trust V23 UserPromptSubmit hook 后，用 `codex --profile v23-primary` 启动 V23 主 profile；它选择本机主模型，并把原生 `/review` 映射到本机 review 模型。V23 executor 与 reviewer 仍作为独立 custom agent 注册。
+将 `package/local.example.toml` 复制到仓库外的本机路径。仅 Codex 安装只需 `[models]` 与 `native_only`；开场、Grok、GitHub 和可选工具可留空。需要外送时再设 `[delivery]`。运行 `python scripts/install.py install --local-config <local-file>`。模型名只写在本机配置中。用 `codex --profile v23-primary` 启动，并在 hook browser 中 trust V23 UserPromptSubmit hook。
 
 ## 从这里开始
 

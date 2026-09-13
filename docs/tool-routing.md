@@ -1,12 +1,12 @@
 # Tool routing
 
 The native UserPromptSubmit hook injects installed instructions and a bounded
-live runtime-state block (install manifest and live probes). It uses no Stop
-hook, scheduler, or task database. Memory of earlier tasks is not treated as
-current runtime authority. CodeGraph, Semble, and RTK are used when they change
-the current task; they are not mandatory on every prompt. Explicit Doctor and
-`probe_tools` checks remain available. Tool failure must not block unrelated
-work.
+live runtime-state block (install manifest and instruction/config integrity).
+Daemon probes are explicit. It uses no Stop hook, scheduler, or task database.
+Memory of earlier tasks is not treated as current runtime authority. CodeGraph,
+Semble, and RTK are used when they change the current task; they are not
+mandatory on every prompt. Explicit Doctor `--probe-tools` / `--probe-daemons`
+remain available. Tool failure must not block unrelated work.
 
 | Situation | Preferred tool |
 | --- | --- |

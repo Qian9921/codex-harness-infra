@@ -28,6 +28,7 @@ REQUIRED_FILES = {
     "scripts/github_delivery.py",
     "scripts/runtime.py",
     "scripts/task_bootstrap.py",
+    "scripts/delivery_policy.py",
 }
 
 
@@ -57,7 +58,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("每条面向用户的 commentary", agents)
         self.assertNotIn("每条面向用户的 commentary", installed)
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
-        self.assertIn("targeted independent verification", workflow)
+        self.assertIn("targeted independent read-only verification", workflow)
         self.assertIn(
             "bounded-search.py", (ROOT / "docs/tool-routing.md").read_text(encoding="utf-8")
         )
@@ -148,22 +149,24 @@ class RepositoryContractTests(unittest.TestCase):
         portable = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         installed_portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
         self.assertIn("UserPromptSubmit", installer)
-        self.assertIn("CodeGraph", portable)
-        self.assertIn("Semble", portable)
-        self.assertIn("RTK", portable)
+        self.assertIn("Optional tools", portable)
+        self.assertIn("daemon probes", portable)
         self.assertNotIn("不是可选路由", installed_portable)
         self.assertIn("按任务相关性使用", installed_portable)
         self.assertIn("不得阻断无关任务", installed_portable)
-        self.assertIn("默认自动进入 GitHub 交付", installed_portable)
+        self.assertIn("[delivery]", installed_portable)
+        self.assertIn("local_only", installed_portable)
         self.assertIn("意图审查", installed_portable)
         self.assertIn("不要求另一次明确“开始”", installed_portable)
         self.assertIn("request_user_input", installed_portable)
         self.assertNotIn("默认直接推进任务", installed_portable)
         self.assertIn("无法安全发现且会实质改变结果", installed_portable)
-        self.assertIn("$grok-execution", installed_portable)
-        self.assertIn("reasoning effort 固定为 `low`", installed_portable)
-        self.assertIn("QUOTA_EXHAUSTED", installed_portable)
-        self.assertIn("GROK_EXECUTION_BLOCKED", installed_portable)
+        self.assertNotIn("$grok-execution", installed_portable)
+        self.assertNotIn("QUOTA_EXHAUSTED", installed_portable)
+        self.assertNotIn("GROK_EXECUTION_BLOCKED", installed_portable)
+        self.assertNotIn("grok-4.6", installed_portable)
+        self.assertNotIn("Luna-low", installed_portable)
+        self.assertIn("只做决策与只读验收", installed_portable)
         self.assertNotIn("[[hooks.Stop]]", installer)
         self.assertNotIn("/Users/", bootstrap)
         self.assertNotIn("/home/", bootstrap)
@@ -233,22 +236,23 @@ class RepositoryContractTests(unittest.TestCase):
             "Empty structured `request_user_input` answers stay unanswered and paused", architecture
         )
         self.assertIn("separately spawned generic Luna-low native subagent", skill)
-        self.assertIn("separately spawned generic Luna-low native subagent", workflow)
+        self.assertNotIn("separately spawned generic Luna-low native subagent", workflow)
+        self.assertNotIn("separately spawned generic Luna-low native subagent", agents)
+        self.assertNotIn("separately spawned generic Luna-low native subagent", portable)
         self.assertIn("MUST be supervised", skill)
-        self.assertIn("MUST be supervised", workflow)
-        self.assertIn("MUST be supervised", architecture)
+        self.assertNotIn("MUST be supervised", workflow)
+        self.assertNotIn("MUST be supervised", architecture)
         self.assertIn("supervisor completion event", skill)
-        self.assertIn("supervisor completion event", workflow)
         self.assertIn("does not directly narrate or poll Grok", skill)
-        self.assertIn("does not directly narrate or poll Grok", workflow)
         self.assertNotIn("may supervise", skill)
         self.assertNotIn("may supervise", workflow)
         self.assertNotIn("may supervise", architecture)
         self.assertNotIn("may supervise", agents)
         self.assertNotIn("may supervise", portable)
         self.assertIn("quota-exhaustion-only fallback", skill)
-        self.assertIn("`v23_executor` remains the quota-exhaustion-only fallback", workflow)
-        self.assertIn("is not the supervisor", workflow)
+        self.assertNotIn("quota-exhaustion-only fallback", workflow)
+        self.assertIn("decision-only", workflow)
+        self.assertIn("never edits files", workflow)
         self.assertIn("start_new_session=True", bridge)
         self.assertNotIn("preexec_fn", bridge)
         self.assertIn("os.execvpe", bridge)
@@ -263,16 +267,43 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("_unregister_dedicated_pgid", bridge)
         self.assertIn("dedicated process group validation failed", bridge)
         self.assertIn("SIGTERM", skill)
-        self.assertIn("SIGTERM", workflow)
-        self.assertIn("SIGTERM", architecture)
+        self.assertNotIn("start_new_session=True", workflow)
         self.assertIn("every normal return and BaseException path", skill)
-        self.assertIn("every normal return and BaseException path", workflow)
-        self.assertIn("every normal return and BaseException path", architecture)
         self.assertIn("You are the native fallback executor for one scoped change", executor)
         self.assertNotIn("Two mutually exclusive modes apply", executor)
         self.assertNotIn("def structured_answers_unanswered", bridge)
         self.assertNotIn("def apply_request_user_input", bridge)
         self.assertNotIn("def is_user_visible_update", bridge)
+
+    def test_trivial_exception_is_not_implementation_authorization(self) -> None:
+        for relative in ("AGENTS.md", "WORKFLOW.md", "package/global-portable.md"):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("琐碎" if relative != "WORKFLOW.md" else "trivial", text)
+            self.assertTrue(
+                "不得当成实现" in text or "never authorize implementation" in text,
+                relative,
+            )
+
+    def test_review_loop_diagnoses_stall_not_max_rounds(self) -> None:
+        github = (ROOT / ".agents/skills/engineering-delivery/references/github-flow.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("Three rounds", github)
+        self.assertIn("stalled progress", github)
+        self.assertIn("external block", github)
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        self.assertIn("stalled progress", workflow)
+
+    def test_portable_instructions_stay_thin(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        self.assertLessEqual(len(agents), 7_500)
+        self.assertLessEqual(len(portable), 4_500)
+        self.assertNotIn("gpt-6-astra", agents)
+        self.assertNotIn("gpt-6-astra", portable)
+        self.assertNotIn("grok-4.6", agents)
+        self.assertNotIn("Luna-low", agents)
+        self.assertIn("never edits files", agents)
 
 
 if __name__ == "__main__":

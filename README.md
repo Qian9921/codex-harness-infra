@@ -21,8 +21,8 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 
 The portable roles are `primary`, `executor`, and `reviewer`:
 
-- `primary` owns the request, scope, decisions, and final communication and does not take implementation when an executor is configured.
-- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps Grok-preferred execution and quota-only native fallback.
+- `primary` is decision-only: scope, routing, targeted read-only acceptance, and the final report. It never edits files and never performs mechanical execution, including tiny code, docs, or config fixes. If the executor route is unavailable, repair a valid route; do not fall back to primary implementation.
+- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter. Backend identity and receipts load only from the selected backend skill.
 - `reviewer` uses fresh context and reviews the current change read-only.
 
 The local installation maps primary, executor, and reviewer roles to the models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration. Shared policy names logical executor IDs and backends, not current native version strings.
@@ -48,12 +48,7 @@ Automatic selection prefers a single suitable paid/included executor. Multiple s
 
 ## Delivery
 
-Discussion is read-only. A normal repository change automatically follows this path unless the user explicitly requests local-only work:
-
-```text
-understand → implement → verify → commit → push → Pull Request
-          → independent review → feedback/fix → approval → merge
-```
+Discussion is read-only. Publication follows explicit `[delivery]` (`local_only` default, `pull_request`, or `merge_if_ready` plus authorized repositories). An explicit current request for a named PR may use one request-delivery-only ephemeral `--local-config` that contains only `[delivery]`; reuse it for every publication command and remove it afterward. The persistent file is unchanged. Installing or configuring credentials is not permission.
 
 The author and reviewer use separate GitHub identities on the same machine. This is an audit and workflow boundary, not a claim of process isolation. The GitHub Pull Request, current head, checks, comments, and reviews are the durable delivery record.
 
@@ -61,11 +56,11 @@ Every new commit changes the review target. Merge requires a valid approval for 
 
 ## Installation boundary
 
-The installer changes only explicitly owned files and marked blocks. It preserves unrelated personal configuration, tools, credentials, and user-authored rules. An unmarked file containing user content is not overwritten. It installs exactly one UserPromptSubmit hook so each new task sees installed instructions and a bounded live runtime-state block (install manifest, CLI/app-server probes, and Doctor summary). CodeGraph, Semble, and RTK are task-relevant; Doctor still probes them on request. Live probes of `install.json` and the running daemon are authoritative; memory of earlier tasks is historical only. It installs no Stop hook, background service, daemon, or project-tracked index. Uninstallation removes only content owned by this project.
+The installer changes only explicitly owned files and marked blocks. It preserves unrelated personal configuration, tools, credentials, and user-authored rules. An unmarked file containing user content is not overwritten. It installs exactly one UserPromptSubmit hook so each new task sees installed instructions and local integrity checks (install manifest, instruction/config, Doctor subset). CodeGraph, Semble, RTK, and daemon probes are explicit Doctor flags or task-relevant. `install.json` and instruction files are the default authority; memory of earlier tasks is historical only. It installs no Stop hook, background service, daemon, or project-tracked index. Uninstallation removes only content owned by this project.
 
 ## Local activation
 
-Copy `package/local.example.toml` to a local-only path, fill its model, opening, GitHub, Python runtime, and tool fields, then run `python scripts/install.py install --local-config <local-file>`. Recommended local models: primary `gpt-6-astra` high, reviewer `gpt-5.6-sol`, Luna low fallback. Start the primary V23 profile with `codex --profile v23-primary`; it selects the local primary model and maps native `/review` to the local review model. Review and trust the one V23 UserPromptSubmit hook in Codex's hook browser before relying on task bootstrap. The V23 executor and reviewer remain separately registered custom agents.
+Copy `package/local.example.toml` to a local-only path. A Codex-only install needs `[models]` and `[routing].selection = "native_only"`; opening, Grok, GitHub, and optional tools may stay empty. Set `[delivery]` when GitHub publication is wanted. Run `python scripts/install.py install --local-config <local-file>`. Model slugs stay in that local file; shared policy does not pin a current native version. Start `codex --profile v23-primary`. Review and trust the one V23 UserPromptSubmit hook in Codex's hook browser. Doctor reports installed skills and the runtime used at install.
 
 ## Start here
 
