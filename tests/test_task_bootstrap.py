@@ -482,7 +482,7 @@ rtk = "rtk"
             (home / "AGENTS.md").write_text("unmanaged personal rules\n", encoding="utf-8")
             non_v23 = {name: ok for name, ok, _detail in doctor_subset(home, local)}
             self.assertFalse(non_v23["global_portable"])
-            self.assertFalse(non_v23["global_local"])
+            self.assertTrue(non_v23["global_local"])
             install(ROOT, home, local, root / "state")
             agent = home / "agents/v23-executor.toml"
             text = agent.read_text(encoding="utf-8")

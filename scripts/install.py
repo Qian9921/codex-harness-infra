@@ -30,8 +30,26 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
+    from scripts.executor_routing import (
+        RoutingError,
+        default_native_spec,
+        executor_agent_description,
+        executor_agent_file,
+        executor_agent_name,
+        parse_policy,
+        render_executor_agent,
+    )
     from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
 except ModuleNotFoundError:  # Support the documented direct script entrypoint.
+    from executor_routing import (  # type: ignore[no-redef]
+        RoutingError,
+        default_native_spec,
+        executor_agent_description,
+        executor_agent_file,
+        executor_agent_name,
+        parse_policy,
+        render_executor_agent,
+    )
     from task_bootstrap import HOOK_TIMEOUT_SECONDS
 
 VERSION = "23.2.0"
@@ -350,23 +368,30 @@ def _override_present(path: Path) -> bool:
     return path.is_symlink() or path.exists()
 
 
+def _override_nonempty(path: Path) -> bool:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        return True
+    if not path.is_file():
+        return False
+    try:
+        return bool(path.read_text(encoding="utf-8").strip())
+    except OSError:
+        return True
+
+
 def _validate_global_override(path: Path) -> None:
-    """Refuse a non-file override shape; do not recurse into directories."""
+    """Refuse unowned nonempty overrides; do not delete or relocate them."""
     if not _override_present(path):
         return
-    if path.is_symlink() or path.is_file():
-        return
-    raise InstallError(f"refusing unsafe global override path: {path}")
-
-
-def _unlink_global_override(path: Path) -> None:
-    """Unlink a regular or symlink override; never follow a symlink target."""
-    if not _override_present(path):
-        return
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-        return
-    raise InstallError(f"refusing unsafe global override path: {path}")
+    if path.exists() and not path.is_file() and not path.is_symlink():
+        raise InstallError(f"refusing unsafe global override path: {path}")
+    if _override_nonempty(path):
+        raise InstallError(
+            "refusing unowned nonempty AGENTS.override.md. Codex treats a nonempty "
+            "override as the entire global instruction file. Retire it yourself "
+            "(move or empty it) before installing; V23 will not delete or relocate "
+            "user override files."
+        )
 
 
 def ensure_within(root: Path, path: Path) -> Path:
@@ -408,6 +433,54 @@ def _load_manifest(state_dir: Path) -> dict | None:
 
 def _old_assets(manifest: dict | None) -> dict[str, str]:
     return {entry["path"]: entry["digest"] for entry in (manifest or {}).get("assets", [])}
+
+
+def _retireable_obsolete(
+    codex_home: Path, old_assets: dict[str, str], new_paths: set[str]
+) -> list[Path]:
+    """Return unused owned assets inside the current home only.
+
+    Paths from another Codex home, or any parent symlink, abort before mutation.
+    """
+    foreign: list[str] = []
+    obsolete: list[Path] = []
+    home = codex_home.resolve()
+    for path_text, digest in old_assets.items():
+        raw = Path(path_text)
+        try:
+            raw.relative_to(home)
+        except ValueError:
+            foreign.append(path_text)
+            continue
+        parent = raw.parent
+        while parent != home and parent != parent.parent:
+            if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
+                raise InstallError(f"unsafe V23 asset parent: {parent}")
+            parent = parent.parent
+        if raw.is_symlink():
+            raise InstallError(
+                f"refusing to retire symlink V23 asset: {raw}. "
+                "The installer will not follow or delete the symlink target."
+            )
+        confined = ensure_within(codex_home, raw)
+        dummy = Asset(confined, None, "file")
+        _check_asset_parents(codex_home, dummy)
+        if str(confined) in new_paths:
+            continue
+        if not confined.exists():
+            continue
+        if confined.is_symlink() or digest_path(confined) != digest:
+            raise InstallError(
+                f"refusing to retire modified obsolete V23 asset: {confined}. "
+                "Preserve the edit or restore the owned digest before upgrade."
+            )
+        obsolete.append(confined)
+    if foreign:
+        raise InstallError(
+            "V23 state does not belong to this Codex home; refusing to mutate "
+            "another home's assets. Use a distinct --state-dir for each Codex home."
+        )
+    return obsolete
 
 
 def _check_asset_target(asset: Asset, old_assets: dict[str, str]) -> None:
@@ -468,6 +541,8 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
     bounded_search_source = repo_root / "scripts/bounded_search.py"
+    routing_source = repo_root / "scripts/executor_routing.py"
+    runtime_source = repo_root / "scripts/runtime.py"
     for source in (
         primary_template,
         executor_template,
@@ -477,20 +552,28 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         bootstrap_source,
         grok_bridge_source,
         bounded_search_source,
+        routing_source,
+        runtime_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
+    try:
+        policy = parse_policy(config)
+    except RoutingError as error:
+        raise InstallError(f"invalid executor routing: {error}") from error
     primary = render_template(
         primary_template,
         primary_model=models.get("primary", ""),
         primary_effort=models.get("primary_effort", "high"),
         reviewer_model=models.get("reviewer", ""),
     )
-    executor = render_template(
-        executor_template,
-        executor_model=models.get("executor", ""),
-        executor_effort=models.get("executor_effort", "low"),
-    )
+    effort = str(models.get("executor_effort", "low"))
+    native = default_native_spec(policy)
+    default_model = native.actual_model if native is not None else str(models.get("executor", ""))
+    try:
+        executor = render_executor_agent(policy, default_model, effort, spec=native)
+    except RoutingError as error:
+        raise InstallError(f"invalid executor routing: {error}") from error
     reviewer = render_template(reviewer_template, reviewer_model=models.get("reviewer", ""))
     try:
         primary_profile = tomllib.loads(primary)
@@ -502,10 +585,30 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         or primary_profile.get("review_model") != models["reviewer"]
     ):
         raise InstallError("rendered V23 primary profile does not match local configuration")
-    _validate_agent_content(
-        executor, "v23_executor", models["executor"], models.get("executor_effort", "low")
-    )
+    _validate_agent_content(executor, "v23_executor", default_model, effort)
     _validate_agent_content(reviewer, "v23_reviewer", models["reviewer"], "high")
+    extra_executors: list[Asset] = []
+    for spec in policy.executors:
+        if spec.backend != "codex":
+            continue
+        name = executor_agent_name(spec, policy)
+        if name == "v23_executor":
+            continue
+        try:
+            rendered = render_executor_agent(
+                policy, spec.actual_model, effort, name=name, spec=spec
+            )
+        except RoutingError as error:
+            raise InstallError(f"invalid executor routing: {error}") from error
+        _validate_agent_content(rendered, name, spec.actual_model, effort)
+        extra_executors.append(
+            Asset(
+                ensure_within(codex_home, codex_home / executor_agent_file(spec, policy)),
+                None,
+                "file",
+                rendered.encode(),
+            )
+        )
     return [
         Asset(
             ensure_within(codex_home, codex_home / "v23-primary.config.toml"),
@@ -550,6 +653,27 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             bounded_search_source,
             "file",
         ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/executor-routing.py"),
+            routing_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/executor_routing.py"),
+            routing_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/runtime.py"),
+            runtime_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/runtime.py"),
+            runtime_source,
+            "file",
+        ),
+        *extra_executors,
     ]
 
 
@@ -559,6 +683,8 @@ def _config_block(
     local_config: Path,
     codex_home: Path,
     state_dir: Path,
+    executor_description: str,
+    extra_agents: str = "",
 ) -> str:
     """Render the one native V23 prompt hook and agent registrations."""
     command = " ".join(
@@ -574,11 +700,11 @@ def _config_block(
             state_dir,
         )
     )
+    extra = f"\n{extra_agents}\n" if extra_agents else "\n"
     return f"""[agents.\"v23_executor\"]
-description = \"V23 quota-exhaustion-only native execution fallback.\"
+description = {json.dumps(executor_description)}
 config_file = \"agents/v23-executor.toml\"
-
-[agents.\"v23_reviewer\"]
+{extra}[agents.\"v23_reviewer\"]
 description = \"V23 independent current-head reviewer.\"
 config_file = \"agents/v23-reviewer.toml\"
 
@@ -670,31 +796,60 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     opening = config.get("opening", {})
     if not isinstance(opening, dict):
         raise InstallError("[opening] must be a TOML table")
-    local = opening.get("instruction")
-    if not isinstance(local, str) or not local.strip():
-        raise InstallError("[opening].instruction must contain the local-only opening rule")
-    local = local.strip()
+    local_raw = opening.get("instruction", "")
+    if local_raw is None:
+        local_raw = ""
+    if not isinstance(local_raw, str):
+        raise InstallError("[opening].instruction must be a string")
+    local = local_raw.strip()
     config_text = codex_config.read_text() if codex_config.exists() else ""
     block_body(agent_text, PORTABLE_KIND)
     block_body(agent_text, LOCAL_KIND)
     block_body(config_text, CONFIG_KIND)
     assets = _assets(repo_root, codex_home, config)
     bootstrap_path = codex_home / "harness/v23/task_bootstrap.py"
+    try:
+        policy = parse_policy(config)
+    except RoutingError as error:
+        raise InstallError(f"invalid executor routing: {error}") from error
+    extra_agent_blocks = []
+    native = default_native_spec(policy)
+    for spec in policy.executors:
+        if spec.backend != "codex":
+            continue
+        name = executor_agent_name(spec, policy)
+        if name == "v23_executor":
+            continue
+        extra_agent_blocks.append(
+            f"[agents.{json.dumps(name)}]\n"
+            f"description = {json.dumps(executor_agent_description(policy, spec))}\n"
+            f"config_file = {json.dumps(executor_agent_file(spec, policy))}\n"
+        )
     config_block = _config_block(
         runtime_python,
         bootstrap_path,
         local_config.resolve(),
         codex_home,
         state_dir,
+        executor_agent_description(policy, native),
+        "\n".join(extra_agent_blocks),
     )
     old_assets = _old_assets(manifest)
+    new_paths = {str(asset.path) for asset in assets}
+    obsolete = _retireable_obsolete(codex_home, old_assets, new_paths)
     for asset in assets:
         _check_asset_parents(codex_home, asset)
         _check_asset_target(asset, old_assets)
     # Complete all safe checks before making a single local mutation.
-    rendered_agents = replace_managed_block(
-        replace_managed_block(agent_text, PORTABLE_KIND, portable), LOCAL_KIND, local
-    )
+    rendered_agents = replace_managed_block(agent_text, PORTABLE_KIND, portable)
+    if local:
+        rendered_agents = replace_managed_block(rendered_agents, LOCAL_KIND, local)
+    else:
+        existing_local = block_body(rendered_agents, LOCAL_KIND)
+        if existing_local is not None:
+            rendered_agents, _removed = remove_managed_block(
+                rendered_agents, LOCAL_KIND, sha256_bytes(existing_local.encode())
+            )
     rendered_config = replace_managed_block(config_text, CONFIG_KIND, config_block)
     try:
         tomllib.loads(rendered_config)
@@ -704,6 +859,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         _snapshot_path(agents_path),
         _snapshot_path(codex_config),
         *(_snapshot_path(asset.path) for asset in assets),
+        *(_snapshot_path(path) for path in obsolete),
         _snapshot_path(state_dir / MANIFEST_NAME),
     ]
     mutated = False
@@ -714,6 +870,11 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
         for asset in assets:
             asset.path.parent.mkdir(parents=True, exist_ok=True)
             _copy_asset(asset)
+        for path in obsolete:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            elif path.exists() or path.is_symlink():
+                path.unlink()
         record = {
             "version": VERSION,
             "agents_path": str(agents_path),
@@ -735,7 +896,6 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     finally:
         for snapshot in snapshots:
             _discard_snapshot(snapshot)
-    _unlink_global_override(override_path)
 
 
 def uninstall(codex_home: Path, state_dir: Path) -> list[str]:
@@ -753,15 +913,19 @@ def uninstall(codex_home: Path, state_dir: Path) -> list[str]:
         agent_text = ""
     else:
         agent_text = agents_path.read_text()
-        for kind, digest in (
-            (PORTABLE_KIND, manifest["portable_digest"]),
-            (LOCAL_KIND, manifest["local_digest"]),
+        portable_body = block_body(agent_text, PORTABLE_KIND)
+        if (
+            portable_body is None
+            or sha256_bytes(portable_body.encode()) != manifest["portable_digest"]
         ):
-            if (
-                block_body(agent_text, kind) is None
-                or sha256_bytes(block_body(agent_text, kind).encode()) != digest
-            ):
-                blockers.append(f"managed {kind.lower()} block was edited or is absent")
+            blockers.append("managed portable block was edited or is absent")
+        local_body = block_body(agent_text, LOCAL_KIND)
+        empty_local = manifest["local_digest"] == sha256_bytes(b"")
+        if empty_local:
+            if local_body is not None:
+                blockers.append("managed local block was edited or is absent")
+        elif local_body is None or sha256_bytes(local_body.encode()) != manifest["local_digest"]:
+            blockers.append("managed local block was edited or is absent")
     if not config_path.is_file() or config_path.is_symlink():
         blockers.append(f"managed Codex config is absent or unsafe: {config_path}")
         config_text = ""
@@ -779,7 +943,8 @@ def uninstall(codex_home: Path, state_dir: Path) -> list[str]:
     # All dependent assets and registrations are intact. Remove them as one
     # logical unit so no registration can point at a deleted V23 agent.
     agent_text, _ = remove_managed_block(agent_text, PORTABLE_KIND, manifest["portable_digest"])
-    agent_text, _ = remove_managed_block(agent_text, LOCAL_KIND, manifest["local_digest"])
+    if manifest["local_digest"] != sha256_bytes(b""):
+        agent_text, _ = remove_managed_block(agent_text, LOCAL_KIND, manifest["local_digest"])
     config_text, _ = remove_managed_block(config_text, CONFIG_KIND, manifest["config_digest"])
     atomic_write(agents_path, agent_text)
     atomic_write(config_path, config_text)

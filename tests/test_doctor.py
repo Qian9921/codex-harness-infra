@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -82,6 +83,7 @@ rtk = "rtk"
             self.assertEqual(report["project_instruction_candidates"], [str(ROOT / "AGENTS.md")])
             self.assertIn("install.json", report["live_runtime_authority"])
             self.assertIn("historical only", report["live_runtime_authority"])
+            self.assertTrue(checks["executor_routing"]["ok"])
 
             skipped = doctor(
                 codex_home,
@@ -150,6 +152,197 @@ rtk = "rtk"
             recovered_checks = {check["name"]: check for check in recovered["checks"]}
             self.assertTrue(recovered["ok"])
             self.assertTrue(recovered_checks["global_override_absent"]["ok"])
+
+    def test_native_only_does_not_inherit_grok_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = "Local-only opening."
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/grok-execution.py").unlink()
+            (codex_home / "skills/grok-execution/SKILL.md").unlink()
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["grok_execution_route"]["ok"])
+            self.assertIn("unrequired", str(checks["grok_execution_route"]["detail"]))
+            self.assertTrue(checks["executor_routing"]["ok"])
+
+    def test_paid_strict_metered_grok_doctor_without_grok_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "metered"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/grok-execution.py").unlink()
+            (codex_home / "skills/grok-execution/SKILL.md").unlink()
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(report["ok"], report["checks"])
+            self.assertTrue(checks["grok_execution_route"]["ok"])
+            self.assertIn("unrequired", str(checks["grok_execution_route"]["detail"]))
+            executor = tomllib.loads((codex_home / "agents/v23-executor.toml").read_text())
+            self.assertEqual(executor["model"], "executor-model")
+            self.assertNotIn("GROK_FALLBACK_NOT_AUTHORIZED", executor["developer_instructions"])
+
+    def test_new_user_native_only_blank_greeting_without_github(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/grok-execution.py").unlink()
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=True,
+                probe_required_tools=False,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(report["ok"], report["checks"])
+            self.assertTrue(checks["local_opening"]["ok"])
+            self.assertTrue(checks["github_delivery"]["ok"])
+            self.assertNotIn("github_author", checks)
+
+    def test_paid_preferred_unavailable_grok_does_not_require_grok_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "unavailable"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            (codex_home / "bin/grok-execution.py").unlink()
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["grok_execution_route"]["ok"])
+            executor = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+            self.assertIn("capability-fit candidate", executor)
+            self.assertNotIn("Act only when the\nparent supplies a verified Grok", executor)
 
     def test_absent_optional_tools_do_not_fail_doctor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

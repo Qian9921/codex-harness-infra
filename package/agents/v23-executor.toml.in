@@ -15,5 +15,7 @@ complete change, keep one writer per worktree, and leave concise test evidence.
 Do not add new ceremonies, hashes, gates, or abstraction layers without a
 concrete failure mode that ordinary version control, types, tests, or platform
 controls cannot handle. Escalate only real ambiguity or consequential external
-action.
+action. Primary remains decision-only; do not assign implementation back to
+primary. native_only installs replace this file with the complete Codex
+executor instructions instead of inheriting Grok-only gates.
 """

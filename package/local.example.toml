@@ -9,15 +9,46 @@ instruction = ""
 python = ""
 
 [models]
-# Local environment data only. Recommended mapping: primary gpt-6-astra high,
-# independent reviewer gpt-5.6-sol, quota-only native fallback Luna low.
-# Shared templates remain model-agnostic placeholders.
+# Local environment data only. Fill with the models available on this machine.
+# Shared templates remain model-agnostic placeholders; do not copy current
+# native version slugs into committed policy.
 primary = ""
 primary_effort = "high"
 executor = ""
-# Native quota-exhaustion-only fallback; normal execution uses Grok Build low.
 executor_effort = "low"
 reviewer = ""
+
+[routing]
+# native_only: Codex executor is the complete normal path; Grok is not required.
+# paid_preferred: prefer a configured paid/included executor that matches the task.
+# paid_strict: same preference; fallback only on an explicit permitted cause.
+# Configs that omit [routing] keep legacy Grok-preferred, quota-only native fallback.
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+# Empty model uses [models].executor. Arbitrary future native slugs are allowed.
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+# Optional paid Grok executor (uncomment and set selection to paid_preferred or
+# paid_strict). User cost_preference is a declaration, not a live balance.
+# [[routing.executors]]
+# id = "grok_build"
+# backend = "grok"
+# requested_model = "grok-4.6"
+# actual_model = "grok-4.6-build"
+# capabilities = ["implementation", "tests", "git", "local_write"]
+# tools = ["workspace-write"]
+# cost_preference = "paid_included"
+# availability = "configured"
+#
+# [routing.fallback]
+# permit = ["quota_exhausted"]
+# target = "native"
 
 [github]
 author_login = ""

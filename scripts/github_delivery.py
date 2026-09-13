@@ -17,6 +17,7 @@ ensure_supported_python(__file__)
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -80,6 +81,9 @@ def _github_environment(config_dir: Path) -> dict[str, str]:
             env.pop(variable)
     env["GH_CONFIG_DIR"] = str(config_dir)
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["NO_COLOR"] = "1"
+    env["CLICOLOR"] = "0"
+    env.pop("GH_FORCE_TTY", None)
     # The author push uses a prevalidated literal URL, so it does not need
     # repository, global, or system Git configuration. Keeping those sources
     # out prevents a later URL rewrite or scoped credential override.
@@ -127,8 +131,9 @@ class GHClient:
 
     @staticmethod
     def _json(output: str) -> object:
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", output)
         try:
-            return json.loads(output)
+            return json.loads(cleaned)
         except json.JSONDecodeError as error:
             raise FlowError("GitHub CLI returned invalid JSON") from error
 
@@ -320,6 +325,7 @@ class GHClient:
             title,
             "--body",
             body,
+            "--draft",
         )
         created = self._json(
             self._run("gh", "pr", "view", created_url, "--repo", repo, "--json", "number")
@@ -517,7 +523,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--event", choices=("APPROVE", "REQUEST_CHANGES", "COMMENT"), default="APPROVE"
     )
     parser.add_argument("--body", default="Independent current-head review.")
+    parser.add_argument("--body-file", type=Path)
     args = parser.parse_args(argv)
+    if args.body_file is not None:
+        args.body = args.body_file.read_text(encoding="utf-8")
     flow = DeliveryFlow(
         GHClient(args.author_config),
         GHClient(args.reviewer_config),

@@ -21,11 +21,30 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 
 The portable roles are `primary`, `executor`, and `reviewer`:
 
-- `primary` owns the request, scope, decisions, and final communication.
-- the external Grok bridge performs bounded implementation and relevant verification at low effort; the native `executor` is used only after a verified Grok quota-exhaustion receipt.
+- `primary` owns the request, scope, decisions, and final communication and does not take implementation when an executor is configured.
+- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps Grok-preferred execution and quota-only native fallback.
 - `reviewer` uses fresh context and reviews the current change read-only.
 
-The local installation maps primary, fallback executor, and reviewer roles to the native models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration; the external Grok execution identity is a portable product contract.
+The local installation maps primary, executor, and reviewer roles to the models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration. Shared policy names logical executor IDs and backends, not current native version strings.
+
+## Executor routing
+
+Copy `package/local.example.toml` and set `[routing].selection`:
+
+- `native_only`: Codex-only. No Grok executable or quota receipt is required.
+- `paid_preferred`: prefer a matching paid/included executor; fallback only if `[routing.fallback]` permits a cause such as `quota_exhausted`.
+- `paid_strict`: same preference; block when the paid/included candidate is unsuitable, except for an explicit permitted fallback cause.
+- omit `[routing]`: legacy Martin-like Grok-preferred, actual-model receipt, quota-only native fallback.
+
+Supported adapters are native Codex and the existing Grok bridge. Cost preference is a user declaration, not a verified live balance. Unknown quota stays unknown. Model updates require changing local mappings only; do not treat a new native slug as an automatic migration.
+
+```text
+python scripts/executor_routing.py select --local-config <local-file> --capability implementation --tool workspace-write
+python scripts/executor_routing.py select --local-config <local-file> --capability implementation --executor <id> --reason "<why>"
+python scripts/executor_routing.py validate-receipt --local-config <local-file> --receipt <file> --task-id <id> --cwd <abs> --owned-path <abs>
+```
+
+Automatic selection prefers a single suitable paid/included executor. Multiple suitable candidates require `--executor` and `--reason`. Native dispatch is a registered Codex custom agent spawn (`invocation.agent`); reinstall after local model mapping changes. Grok uses the existing bridge only.
 
 ## Delivery
 
