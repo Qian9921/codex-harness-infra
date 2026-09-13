@@ -380,6 +380,52 @@ instruction = "Local-only opening."
             self.assertTrue(checks["tools_optional"]["ok"])
             self.assertNotIn("tool_codegraph", checks)
 
+    def test_github_write_without_identities_is_unready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[delivery]
+mode = "pull_request"
+repositories = ["owner/demo-repo"]
+""".lstrip(),
+                encoding="utf-8",
+            )
+            home = root / "codex"
+            install(ROOT, home, local, root / "state")
+            report = doctor(home, local, ROOT / "tests", check_github=True)
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertFalse(report["ok"])
+            self.assertFalse(checks["github_delivery"]["ok"])
+            skipped = doctor(
+                home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+                probe_daemons=False,
+            )
+            names = {check["name"] for check in skipped["checks"]}
+            self.assertNotIn("tool_codegraph", names)
+            self.assertNotIn("daemon_cli_version", names)
+
 
 if __name__ == "__main__":
     unittest.main()

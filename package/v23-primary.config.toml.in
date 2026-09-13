@@ -1,3 +1,4 @@
+# Logical role: primary. Decision-only: no file edits or mechanical execution.
 model = "{{primary_model}}"
 model_reasoning_effort = "{{primary_effort}}"
 review_model = "{{reviewer_model}}"

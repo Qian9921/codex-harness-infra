@@ -21,8 +21,8 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 
 The portable roles are `primary`, `executor`, and `reviewer`:
 
-- `primary` owns the request, scope, decisions, and final communication and does not take implementation when an executor is configured.
-- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps Grok-preferred execution and quota-only native fallback.
+- `primary` is decision-only: scope, routing, targeted read-only acceptance, and the final report. It never edits files and never performs mechanical execution, including tiny code, docs, or config fixes. If the executor route is unavailable, repair a valid route; do not fall back to primary implementation.
+- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter. Backend identity and receipts load only from the selected backend skill.
 - `reviewer` uses fresh context and reviews the current change read-only.
 
 The local installation maps primary, executor, and reviewer roles to the models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration. Shared policy names logical executor IDs and backends, not current native version strings.
@@ -48,7 +48,7 @@ Automatic selection prefers a single suitable paid/included executor. Multiple s
 
 ## Delivery
 
-Discussion is read-only. Publication follows explicit `[delivery]` (`local_only` default, `pull_request`, or `merge_if_ready` plus authorized repositories). Installing or configuring credentials is not permission.
+Discussion is read-only. Publication follows explicit `[delivery]` (`local_only` default, `pull_request`, or `merge_if_ready` plus authorized repositories). An explicit current request for a named PR may use a request-scoped effective `--local-config` that replaces only `[delivery]`; the persistent file is unchanged. Installing or configuring credentials is not permission.
 
 The author and reviewer use separate GitHub identities on the same machine. This is an audit and workflow boundary, not a claim of process isolation. The GitHub Pull Request, current head, checks, comments, and reviews are the durable delivery record.
 

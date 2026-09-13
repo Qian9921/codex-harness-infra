@@ -21,8 +21,8 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 可移植角色为 `primary`、`executor` 和 `reviewer`：
 
-- `primary` 负责需求、范围、决策和最终沟通；配置了 executor 时不承担实现。
-- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径；付费感知模式优先已配置的 paid/included executor；省略 `[routing]` 时保持 Grok 优先与仅配额耗尽的 native fallback。
+- `primary` 只做决策与只读验收，永不改文件，也不做机械执行。执行器不可用时修复路由，禁止把实现交回 primary。
+- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径。后端身份与 receipt 只从选中 backend 的 skill 加载。
 - `reviewer` 使用新上下文，以只读方式审查当前变更。
 
 本机安装会把 primary、executor 和 reviewer 映射到该机器可用的模型和工具。Native 模型 slug、账号映射、凭据、开场指令和绝对路径仍属于本机配置。共享策略使用逻辑 executor ID 与 backend，不写入当前 native 版本号。
@@ -44,7 +44,7 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 
 ## 交付
 
-讨论任务保持只读。发布遵循明确的 `[delivery]`（默认 `local_only`，或 `pull_request` / `merge_if_ready` 加授权仓库）。安装或配置凭据不是发布授权。
+讨论任务保持只读。发布遵循明确的 `[delivery]`（默认 `local_only`，或 `pull_request` / `merge_if_ready` 加授权仓库）。当前用户对指定仓库的明确 PR 请求可用请求范围 effective `--local-config` 覆盖 standing `local_only`，不改持久文件。安装或配置凭据不是发布授权。
 
 作者和 Reviewer 在同一台机器上使用不同的 GitHub 身份。这是审计与工作流边界，不宣称进程或凭据隔离。GitHub Pull Request、当前 head、检查、评论和 Review 是交付的持久记录。
 

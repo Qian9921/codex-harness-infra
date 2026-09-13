@@ -14,11 +14,11 @@ If a target exists without the expected marker and contains user content, instal
 
 ## Global instruction path
 
-The canonical V23 global instruction file is always `${CODEX_HOME}/AGENTS.md`. Codex treats a non-empty `AGENTS.override.md` as a complete global-scope replacement for `AGENTS.md` and skips an empty override; that override path is intended for temporary user overrides, so V23 does not install or retain it. On install or upgrade the installer deletes `${CODEX_HOME}/AGENTS.override.md` whether the file is V23-owned, unowned, or modified. A symlink is unlinked without touching its target. A directory or other non-file shape is refused instead of recursive deletion.
+The canonical V23 global instruction file is always `${CODEX_HOME}/AGENTS.md`. Codex treats a non-empty `AGENTS.override.md` as a complete global-scope replacement for `AGENTS.md` and skips an empty override. V23 does not install that override. An unowned or modified nonempty `${CODEX_HOME}/AGENTS.override.md` is preserved: installation refuses to continue rather than deleting, emptying, or relocating it. A symlink or non-file shape is refused instead of recursive deletion. An empty override file may remain; Doctor reports a nonempty override as `global_override_absent=false`.
 
 When `${CODEX_HOME}/AGENTS.md` is byte-identical to the authorized current V21 kernel (10192 bytes, SHA-256 `49045df930cac1d0148575ad3f94b193383e4eee8abdb54e3472ccbef6a73bf7`), or matches that digest after an unambiguous newline fold, the installer treats the file as retired V21 and replaces it with only the new V23 managed blocks. The V21 title and policy lines are a signature, not a classification: if they are present but the complete content is not the exact known file, installation raises `InstallError` before any mutation. Ordinary unmanaged `AGENTS.md` content is not treated as V21 and is preserved through the marked-block mechanism.
 
-Validation and rendering complete before any mutation. `AGENTS.md`, other managed assets, and the durable V23 manifest are written before the override is unlinked, so a failed earlier step leaves the old override active. A failure while writing the new manifest rolls back only `AGENTS.md`, `config.toml`, the generated V23 assets, and the previous manifest bytes; the override is not moved or deleted, and a retry remains safe. If the override unlink fails after the manifest is durable, the installer leaves both in place for a safe retry or Doctor failure. An existing V23 manifest whose `agents_path` still names `AGENTS.override.md` is migrated in place: the new manifest records `AGENTS.md`.
+Validation and rendering complete before any mutation. `AGENTS.md`, other managed assets, and the durable V23 manifest are written as one unit. A failure while writing the new manifest rolls back only `AGENTS.md`, `config.toml`, the generated V23 assets, and the previous manifest bytes; `AGENTS.override.md` is not moved or deleted. An existing V23 manifest whose `agents_path` still names `AGENTS.override.md` is migrated in place: the new manifest records `AGENTS.md`.
 
 ## Preserved content
 
@@ -28,7 +28,7 @@ The project does not manage or automatically start external tools that happen to
 
 ## Upgrade and uninstall
 
-An upgrade updates only the project's marked content and owned files. It does not scan the home directory or infer ownership from names. The global override file is an explicit exception: it is removed because official Codex precedence would otherwise suppress the canonical `AGENTS.md`. Uninstall removes a V23 installation only when its dependent blocks and generated assets are all still intact; if any owned item was edited, it preserves the complete unit and reports the conflict for manual resolution. After a migrated install, uninstall operates on `AGENTS.md` and does not recreate `AGENTS.override.md`.
+An upgrade updates only the project's marked content and owned files. It does not scan the home directory or infer ownership from names. It does not delete unowned or modified `AGENTS.override.md`. Uninstall removes a V23 installation only when its dependent blocks and generated assets are all still intact; if any owned item was edited, it preserves the complete unit and reports the conflict for manual resolution. After a migrated install, uninstall operates on `AGENTS.md` and does not recreate `AGENTS.override.md`.
 
 ## Verification
 

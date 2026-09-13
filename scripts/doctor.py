@@ -210,6 +210,14 @@ def doctor(
                         "local_only; configured credentials are not publication authorization",
                     )
                 )
+            elif delivery is not None and delivery.github_write and not configured:
+                checks.append(
+                    _result(
+                        "github_delivery",
+                        False,
+                        "pull_request/merge_if_ready requires GitHub identities and repositories",
+                    )
+                )
             elif not configured:
                 checks.append(
                     _result(

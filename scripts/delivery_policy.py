@@ -2,11 +2,19 @@
 
 Installing or configuring credentials is not publication permission.
 Omitted ``[delivery]`` is ``local_only`` with an empty repository set.
+A current user request may write a request-scoped effective config that
+replaces only ``[delivery]`` without mutating the persistent file.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
+import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 MODE_LOCAL_ONLY = "local_only"
@@ -83,3 +91,78 @@ def assert_publication_allowed(policy: DeliveryPolicy, repo: str, action: str) -
         raise DeliveryError("merge requires delivery.mode=merge_if_ready")
     if action not in {"push", "ensure-pr", "publish-review", "merge", "preflight"}:
         raise DeliveryError(f"unsupported delivery action: {action}")
+
+
+def strip_delivery_table(text: str) -> str:
+    """Return *text* with a top-level ``[delivery]`` table removed."""
+    kept: list[str] = []
+    skipping = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("[") and not stripped.startswith("[["):
+            closing = stripped.find("]")
+            name = stripped[1:closing].strip() if closing > 0 else ""
+            skipping = name == "delivery"
+        if skipping:
+            continue
+        kept.append(line)
+    return "".join(kept).rstrip() + ("\n" if kept else "")
+
+
+def render_delivery_table(mode: str, repositories: Sequence[str]) -> str:
+    repos = ", ".join(json.dumps(item) for item in repositories)
+    return f"[delivery]\nmode = {json.dumps(mode)}\nrepositories = [{repos}]\n"
+
+
+def write_effective_config(
+    source: Path, dest: Path, mode: str, repositories: Sequence[str]
+) -> None:
+    """Copy *source* to *dest*, replacing only ``[delivery]``. Persistent file unchanged."""
+    text = source.read_text(encoding="utf-8")
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise DeliveryError(f"persistent local configuration is invalid: {error}") from error
+    policy = parse_delivery(
+        {"delivery": {"mode": mode, "repositories": [str(item) for item in repositories]}}
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.resolve() == source.resolve():
+        raise DeliveryError("effective config must be a distinct path from the persistent file")
+    rendered = (
+        strip_delivery_table(text)
+        + "\n"
+        + render_delivery_table(policy.mode, sorted(policy.repositories))
+    )
+    dest.write_text(rendered, encoding="utf-8")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    effective = sub.add_parser(
+        "effective",
+        help="write a request-scoped config that replaces only [delivery]",
+    )
+    effective.add_argument("--local-config", type=Path, required=True)
+    effective.add_argument("--mode", required=True, choices=sorted(DELIVERY_MODES))
+    effective.add_argument(
+        "--repository",
+        action="append",
+        dest="repositories",
+        required=True,
+        help="authorized owner/name; repeat for multiple repositories",
+    )
+    effective.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        write_effective_config(args.local_config, args.output, args.mode, args.repositories)
+    except (OSError, DeliveryError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    print(str(args.output))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

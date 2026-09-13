@@ -1,6 +1,6 @@
 # Delivery workflow
 
-This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Process-group internals live in `.agents/skills/grok-execution/references/grok-process-lifecycle.md`.
+This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Selected-backend internals (including Grok identity, supervision, effort, PGID, and quota labels) load only from that backend's skill.
 
 ## Work kind and capability
 
@@ -17,7 +17,7 @@ Capability follows the installed `[delivery]` table, not an implied standing gra
 
 ## Participatory questioning
 
-This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly. Those exceptions never authorize implementation or publication by themselves. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery. Preserve intent across turns; separate facts from preferences; show evidence when a conclusion changes; state material assumptions only when they would change the decision.
+This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly as replies or read-only work; they never write files. Those exceptions never authorize implementation or publication by themselves. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery. Preserve intent across turns; separate facts from preferences; show evidence when a conclusion changes; state material assumptions only when they would change the decision.
 
 ## DISCUSS
 
@@ -42,23 +42,44 @@ understand → implement → verify → commit → push → Pull Request
 
 For `merge_if_ready` on an authorized repository, continue from a valid current-head approval through merge when required checks pass.
 
-The primary role owns the request, scope, decisions, verification, and final result. The locally selected execution route performs one bounded implementation, test, and fix pass and returns concise files, behavior, evidence, and unresolved items. When that route is Grok, effort is low and Luna-low supervises lifecycle and receipt only. Primary then runs targeted independent verification of those claims instead of duplicating the full implementation. `run`/`resume` wait without a wall-clock timeout while the dedicated Grok process group is genuinely alive and not a zombie. Dedicated-PGID cleanup, spawn-issued cleanup token (`start_new_session=True`), registry lock spanning SIGTERM/SIGHUP/SIGINT coordination, SIGKILL of the process group, and the post-exec launcher are required; every normal return and BaseException path drains remaining members. See `.agents/skills/grok-execution/references/grok-process-lifecycle.md`. All Codex Grok `run`/`resume` invocations MUST be supervised by a separately spawned generic Luna-low native subagent, distinct from `v23_executor`. That supervisor watches lifecycle and receipt only and never edits. The parent waits for the supervisor completion event and does not directly narrate or poll Grok. When Grok is selected, `v23_executor` remains the quota-exhaustion-only fallback and is not the supervisor; `native_only` uses that same agent as the complete Codex executor. The reviewer receives the request, current diff, relevant evidence, and current head SHA in fresh read-only context.
+The primary role is decision-only: request, scope, routing, targeted read-only
+acceptance, and the final result. Primary never edits files and never performs
+mechanical execution, including tiny code, docs, or config fixes. The locally
+selected execution route performs one bounded implementation, test, and fix
+pass and returns concise files, behavior, evidence, and unresolved items.
+Primary then runs targeted independent read-only verification of those claims
+instead of duplicating the full implementation. If no valid executor route is
+available, repair routing; do not fall back to primary implementation.
+`native_only` is a complete Codex executor path. When routing selects another
+backend, load that backend's skill for identity, supervision, and receipts.
+The reviewer receives the request, current diff, relevant evidence, and current
+head SHA in fresh read-only context.
 
 Executor selection is local and capability-based. Run
 `python scripts/executor_routing.py select --local-config <file> --capability implementation`
-(or the installed `bin/executor-routing.py`). `native_only` is a complete Codex
-path. `paid_preferred` and `paid_strict` prefer a configured paid/included
-executor; configs without `[routing]` keep Grok-preferred execution with
-quota-only native fallback. Do not treat unknown quota as zero, do not migrate
-just because a new native slug exists, and do not label network/auth/timeout/
-bridge errors as quota. Primary remains decision-only. Model names are frozen
-at install, update, or actual use of the local mapping; do not auto-upgrade
-shared policy to a new native version string.
+(or the installed `bin/executor-routing.py`). Do not treat unknown quota as
+zero, do not migrate just because a new native slug exists, and do not label
+network/auth/timeout/bridge errors as quota. Model names are frozen at install,
+update, or actual use of the local mapping; do not auto-upgrade shared policy
+to a new native version string. Shared instructions use the logical `primary`
+role name, not a native model slug.
 
 The author and reviewer are different GitHub identities. The author must be the GitHub actor that pushes the branch; on a shared machine, explicitly select the author's isolated Git credential helper instead of inheriting the default credential. The reviewer model's verdict, the GitHub approval, and GitHub's branch rules are separate facts. A review is valid only for the head SHA it inspected. Any later commit requires a new review.
 
 Use the V23 delivery adapter for branch push, PR creation, GitHub review, and
-merge checks. Publication commands require `--local-config`. Its push operation requires an explicit worktree and refspec and
+merge checks. Publication commands require `--local-config`. An explicit current
+request to open a named PR while standing policy is `local_only` is honored
+without re-asking and without rewriting the persistent config: write a
+request-scoped effective file that copies the local config and replaces only
+`[delivery]`, then pass that file as `--local-config`.
+
+```text
+python scripts/delivery_policy.py effective --local-config <persistent.toml> \
+  --mode pull_request --repository <owner/name> --output <request.toml>
+python scripts/github_delivery.py ensure-pr --local-config <request.toml> ...
+```
+
+Its push operation requires an explicit worktree and refspec and
 reads one raw local credential-free HTTPS `github.com` URL, then starts an
 otherwise config-isolated Git push with the configured author's GH_CONFIG_DIR
 credential helper.
