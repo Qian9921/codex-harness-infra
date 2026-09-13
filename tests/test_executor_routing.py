@@ -12,6 +12,8 @@ from scripts.executor_routing import (
     RECEIPT_SCHEMA,
     default_native_spec,
     executor_agent_instructions,
+    grok_checks_required,
+    is_fallback_only_role,
     parse_policy,
     select_executor,
     validate_fallback_receipt,
@@ -499,6 +501,92 @@ availability = "configured"
         self.assertFalse(result.native_is_fallback)
         spec = default_native_spec(policy)
         self.assertNotIn("Act only when the", executor_agent_instructions(policy, spec))
+        self.assertNotIn("native_only route is complete", executor_agent_instructions(policy, spec))
+
+    def test_native_only_ignores_dormant_grok_and_fallback(self) -> None:
+        text = PAID_BOTH.replace("paid_preferred", "native_only")
+        policy = parse_policy(__import__("tomllib").loads(text))
+        self.assertFalse(policy.grok_required)
+        self.assertFalse(grok_checks_required(policy))
+        self.assertFalse(policy.native_is_fallback)
+        spec = default_native_spec(policy)
+        assert spec is not None
+        self.assertFalse(is_fallback_only_role(policy, spec))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.selected_id, "native")
+        self.assertFalse(result.native_is_fallback)
+        instructions = executor_agent_instructions(policy, spec)
+        self.assertNotIn("GROK_FALLBACK_NOT_AUTHORIZED", instructions)
+        owned = ["/tmp/work/owned"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "grok_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "grok-4.6",
+        }
+        blocked = validate_fallback_receipt(
+            policy,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(blocked.status, "blocked")
+        self.assertIn("does not authorize Grok quota fallback", blocked.blocked or "")
+
+    def test_fallback_source_respects_paid_strict_eligibility(self) -> None:
+        metered = PAID_STRICT.replace(
+            'cost_preference = "paid_included"\navailability = "configured"',
+            'cost_preference = "metered"\navailability = "configured"',
+            1,
+        )
+        policy = parse_policy(__import__("tomllib").loads(metered))
+        owned = ["/tmp/work/owned"]
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "grok_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "grok-4.6",
+        }
+        blocked = validate_fallback_receipt(
+            policy,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(blocked.status, "blocked")
+        preferred = parse_policy(
+            __import__("tomllib").loads(
+                PAID_BOTH.replace(
+                    'cost_preference = "paid_included"\navailability = "configured"',
+                    'cost_preference = "metered"\navailability = "configured"',
+                    1,
+                )
+            )
+        )
+        allowed = validate_fallback_receipt(
+            preferred,
+            receipt,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(allowed.status, "fallback")
 
 
 if __name__ == "__main__":

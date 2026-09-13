@@ -295,7 +295,9 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
         for item in grok_sources
     )
     grok_required = grok_live and selection != SELECTION_NATIVE_ONLY
-    native_is_fallback = bool(PERMIT_QUOTA in permit and grok_sources and target_id)
+    native_is_fallback = bool(
+        selection != SELECTION_NATIVE_ONLY and PERMIT_QUOTA in permit and grok_sources and target_id
+    )
     return RoutingPolicy(
         selection=selection,
         executors=executors,
@@ -370,6 +372,8 @@ def executor_agent_file(spec: ExecutorSpec, policy: RoutingPolicy) -> str:
 
 
 def is_quota_fallback_target(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
+    if policy.selection == SELECTION_NATIVE_ONLY:
+        return False
     return (
         PERMIT_QUOTA in policy.fallback_permit
         and policy.fallback_target == spec.id
@@ -379,6 +383,8 @@ def is_quota_fallback_target(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
 
 
 def is_fallback_only_role(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
+    if policy.selection == SELECTION_NATIVE_ONLY:
+        return False
     if spec.backend != BACKEND_CODEX:
         return False
     if policy.legacy:
@@ -390,6 +396,19 @@ def is_fallback_only_role(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
     return not (
         policy.selection == SELECTION_PAID_STRICT and spec.cost_preference == COST_PAID_INCLUDED
     )
+
+
+def mode_allows_initial(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
+    """Whether this candidate may be an initial (non-fallback) selection."""
+    if policy.selection == SELECTION_NATIVE_ONLY:
+        return spec.backend == BACKEND_CODEX
+    if is_fallback_only_role(policy, spec):
+        return False
+    if policy.legacy:
+        return spec.backend == BACKEND_GROK
+    if policy.selection == SELECTION_PAID_STRICT:
+        return spec.cost_preference == COST_PAID_INCLUDED
+    return True
 
 
 def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
@@ -648,7 +667,12 @@ def validate_fallback_receipt(
     """Authorize native fallback only from a bound quota receipt."""
 
     grok_sources = [item for item in policy.executors if item.backend == BACKEND_GROK]
-    if not grok_sources or PERMIT_QUOTA not in policy.fallback_permit or not policy.fallback_target:
+    if (
+        policy.selection == SELECTION_NATIVE_ONLY
+        or not grok_sources
+        or PERMIT_QUOTA not in policy.fallback_permit
+        or not policy.fallback_target
+    ):
         return _blocked(policy, "this policy does not authorize Grok quota fallback")
     if not isinstance(receipt, dict):
         return _blocked(policy, "fallback receipt is not a JSON object")
@@ -685,7 +709,8 @@ def validate_fallback_receipt(
     usable_sources = [
         item
         for item in grok_sources
-        if _capability_match(item, capabilities, tools) is None
+        if mode_allows_initial(policy, item)
+        and _capability_match(item, capabilities, tools) is None
         and _availability_block(item) is None
     ]
     if source_id:
@@ -749,15 +774,26 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "writer per worktree, and leave concise test evidence. Primary remains\n"
             "decision-only; do not assign implementation back to primary."
         )
+    if policy.selection == SELECTION_NATIVE_ONLY:
+        return (
+            "You are the native implementation executor for one scoped change. This\n"
+            "native_only route is complete: Grok is not required and no quota receipt is\n"
+            "needed. Make the smallest complete change, keep one writer per worktree, and\n"
+            "leave concise test evidence. Do not add new ceremonies, hashes, gates, or\n"
+            "abstraction layers without a concrete failure mode that ordinary version\n"
+            "control, types, tests, or platform controls cannot handle. Escalate only real\n"
+            "ambiguity or consequential external action. Primary remains decision-only; do\n"
+            "not assign implementation back to primary."
+        )
     return (
-        "You are the native implementation executor for one scoped change. This\n"
-        "native_only route is complete: Grok is not required and no quota receipt is\n"
-        "needed. Make the smallest complete change, keep one writer per worktree, and\n"
-        "leave concise test evidence. Do not add new ceremonies, hashes, gates, or\n"
-        "abstraction layers without a concrete failure mode that ordinary version\n"
-        "control, types, tests, or platform controls cannot handle. Escalate only real\n"
-        "ambiguity or consequential external action. Primary remains decision-only; do\n"
-        "not assign implementation back to primary."
+        "You are a native Codex implementation executor selected under the configured\n"
+        "routing mode. This candidate is a normal selectable executor, not a Grok quota\n"
+        "fallback, and no quota receipt is required. Make the smallest complete change,\n"
+        "keep one writer per worktree, and leave concise test evidence. Do not add new\n"
+        "ceremonies, hashes, gates, or abstraction layers without a concrete failure\n"
+        "mode that ordinary version control, types, tests, or platform controls cannot\n"
+        "handle. Escalate only real ambiguity or consequential external action. Primary\n"
+        "remains decision-only; do not assign implementation back to primary."
     )
 
 

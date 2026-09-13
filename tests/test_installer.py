@@ -830,6 +830,98 @@ availability = "configured"
             self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
             self.assertFalse(extra.exists())
 
+    def test_cross_home_state_reuse_does_not_delete_foreign_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            state = root / "state"
+            home_a = root / "homeA"
+            home_b = root / "homeB"
+            install(repo, home_a, local, state)
+            owned = home_a / "agents/v23-executor.toml"
+            self.assertTrue(owned.is_file())
+            previous = owned.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(InstallError, "does not belong to this Codex home"):
+                install(repo, home_b, local, state)
+            self.assertEqual(owned.read_text(encoding="utf-8"), previous)
+            self.assertFalse((home_b / "agents/v23-executor.toml").exists())
+            self.assertTrue((state / "install.json").is_file())
+
+    def test_symlink_parent_is_not_used_for_obsolete_retirement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            home = root / "home"
+            outside = root / "outside-agents"
+            outside.mkdir()
+            planted = outside / "keep.txt"
+            planted.write_text("keep\n", encoding="utf-8")
+            home.mkdir(parents=True)
+            (home / "agents").symlink_to(outside)
+            with self.assertRaisesRegex(InstallError, "unsafe V23 asset parent|target escapes"):
+                install(repo, home, local, root / "state")
+            self.assertEqual(planted.read_text(encoding="utf-8"), "keep\n")
+            self.assertTrue((home / "agents").is_symlink())
+
+    def test_mode_only_upgrade_to_native_only_with_dormant_grok(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            paid = """
+[models]
+primary = "primary-model"
+executor = "native-slug"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+"""
+            local.write_text(paid.lstrip() + "\n", encoding="utf-8")
+            codex_home, state_dir = root / "codex", root / "state"
+            install(ROOT, codex_home, local, state_dir)
+            local.write_text(paid.replace("paid_preferred", "native_only").lstrip() + "\n")
+            install(ROOT, codex_home, local, state_dir)
+            role = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+            self.assertNotIn("GROK_FALLBACK_NOT_AUTHORIZED", role)
+            self.assertIn("native_only route is complete", role)
+            report = doctor(
+                codex_home, local, ROOT / "tests", check_github=False, probe_required_tools=False
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["executor_routing"]["ok"])
+            (codex_home / "bin/grok-execution.py").unlink()
+            report = doctor(
+                codex_home, local, ROOT / "tests", check_github=False, probe_required_tools=False
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(checks["grok_execution_route"]["ok"])
+            install(ROOT, codex_home, local, state_dir)
+            uninstall_report = uninstall(codex_home, state_dir)
+            self.assertTrue(any("removed V23 installation" in line for line in uninstall_report))
+
     def test_selected_candidate_model_is_installed_on_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

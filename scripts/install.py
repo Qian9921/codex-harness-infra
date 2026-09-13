@@ -435,6 +435,49 @@ def _old_assets(manifest: dict | None) -> dict[str, str]:
     return {entry["path"]: entry["digest"] for entry in (manifest or {}).get("assets", [])}
 
 
+def _retireable_obsolete(
+    codex_home: Path, old_assets: dict[str, str], new_paths: set[str]
+) -> list[Path]:
+    """Return unused owned assets inside the current home only.
+
+    Paths from another Codex home, or any parent symlink, abort before mutation.
+    """
+    foreign: list[str] = []
+    obsolete: list[Path] = []
+    home = codex_home.resolve()
+    for path_text, digest in old_assets.items():
+        raw = Path(path_text)
+        try:
+            raw.relative_to(home)
+        except ValueError:
+            foreign.append(path_text)
+            continue
+        parent = raw.parent
+        while parent != home and parent != parent.parent:
+            if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
+                raise InstallError(f"unsafe V23 asset parent: {parent}")
+            parent = parent.parent
+        confined = ensure_within(codex_home, raw)
+        dummy = Asset(confined, None, "file")
+        _check_asset_parents(codex_home, dummy)
+        if str(confined) in new_paths:
+            continue
+        if not confined.exists():
+            continue
+        if confined.is_symlink() or digest_path(confined) != digest:
+            raise InstallError(
+                f"refusing to retire modified obsolete V23 asset: {confined}. "
+                "Preserve the edit or restore the owned digest before upgrade."
+            )
+        obsolete.append(confined)
+    if foreign:
+        raise InstallError(
+            "V23 state does not belong to this Codex home; refusing to mutate "
+            "another home's assets. Use a distinct --state-dir for each Codex home."
+        )
+    return obsolete
+
+
 def _check_asset_target(asset: Asset, old_assets: dict[str, str]) -> None:
     key = str(asset.path)
     if not asset.path.exists() and not asset.path.is_symlink():
@@ -776,19 +819,7 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     )
     old_assets = _old_assets(manifest)
     new_paths = {str(asset.path) for asset in assets}
-    obsolete: list[Path] = []
-    for path_text, digest in old_assets.items():
-        if path_text in new_paths:
-            continue
-        path = Path(path_text)
-        if not path.exists():
-            continue
-        if path.is_symlink() or digest_path(path) != digest:
-            raise InstallError(
-                f"refusing to retire modified obsolete V23 asset: {path}. "
-                "Preserve the edit or restore the owned digest before upgrade."
-            )
-        obsolete.append(path)
+    obsolete = _retireable_obsolete(codex_home, old_assets, new_paths)
     for asset in assets:
         _check_asset_parents(codex_home, asset)
         _check_asset_target(asset, old_assets)
