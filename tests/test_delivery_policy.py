@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -86,24 +87,53 @@ class DeliveryPolicyTests(unittest.TestCase):
             flow._require_delivery("owner/other", "ensure-pr")
         flow._require_delivery("owner/allowed", "ensure-pr")
 
-    def test_request_scoped_effective_config_leaves_persistent_unchanged(self) -> None:
+    def test_effective_file_is_delivery_table_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             persistent = Path(directory) / "local.toml"
             original = (
-                '[models]\nprimary = "p"\n\n[delivery]\nmode = "local_only"\nrepositories = []\n'
+                '[models]\nprimary = "secret-model"\n'
+                'path = "/home/user/.config/secret"\n\n'
+                "[section]\nvalue = 1\n\n"
+                '[delivery]\nmode = "local_only"\nrepositories = []\n'
             )
             persistent.write_text(original, encoding="utf-8")
-            effective = Path(directory) / "request.toml"
+            effective = Path(directory) / "ephemeral" / "request.toml"
             write_effective_config(persistent, effective, MODE_PULL_REQUEST, ["owner/demo-repo"])
             self.assertEqual(persistent.read_text(encoding="utf-8"), original)
-            loaded = tomllib.loads(effective.read_text(encoding="utf-8"))
-            self.assertEqual(loaded["models"]["primary"], "p")
+            text = effective.read_text(encoding="utf-8")
+            self.assertEqual(
+                text, '[delivery]\nmode = "pull_request"\nrepositories = ["owner/demo-repo"]\n'
+            )
+            self.assertNotIn("secret-model", text)
+            self.assertNotIn("/home/user", text)
+            self.assertNotIn("[section]", text)
+            self.assertNotIn("[models]", text)
+            self.assertEqual(stat.S_IMODE(effective.stat().st_mode), 0o600)
+            with self.assertRaises(DeliveryError):
+                write_effective_config(
+                    persistent, persistent, MODE_PULL_REQUEST, ["owner/demo-repo"]
+                )
+            loaded = tomllib.loads(text)
             policy = parse_delivery(loaded)
-            self.assertEqual(policy.mode, MODE_PULL_REQUEST)
-            self.assertTrue(policy.authorizes("owner/demo-repo"))
-            self.assertEqual(parse_delivery(tomllib.loads(original)).mode, MODE_LOCAL_ONLY)
+            assert_publication_allowed(policy, "owner/demo-repo", "ensure-pr")
+            with self.assertRaises(DeliveryError):
+                assert_publication_allowed(policy, "owner/other", "ensure-pr")
+            with self.assertRaises(DeliveryError):
+                assert_publication_allowed(policy, "owner/demo-repo", "merge")
 
-    def test_github_cli_uses_effective_delivery_without_rewriting_persistent(self) -> None:
+    def test_inline_delivery_table_and_simple_section_parse(self) -> None:
+        inline = tomllib.loads(
+            '[delivery]\nmode = "pull_request"\nrepositories = ["owner/demo-repo"]\n'
+        )
+        policy = parse_delivery(inline)
+        self.assertEqual(policy.mode, MODE_PULL_REQUEST)
+        self.assertTrue(policy.authorizes("owner/demo-repo"))
+        simple = tomllib.loads(
+            'mode = 1\n\n[delivery]\nmode = "pull_request"\nrepositories = ["owner/demo-repo"]\n'
+        )
+        self.assertEqual(parse_delivery(simple).mode, MODE_PULL_REQUEST)
+
+    def test_github_cli_allows_named_repo_denies_other_and_blocks_merge(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             persistent = Path(directory) / "local.toml"
             persistent.write_text(
@@ -130,11 +160,41 @@ class DeliveryPolicyTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("local_only", persistent.read_text(encoding="utf-8"))
+            self.assertNotIn("[models]", effective.read_text(encoding="utf-8"))
+            base = [
+                "ensure-pr",
+                "--author-config",
+                str(Path(directory) / "author"),
+                "--reviewer-config",
+                str(Path(directory) / "reviewer"),
+                "--author-login",
+                "author",
+                "--reviewer-login",
+                "reviewer",
+                "--branch",
+                "topic",
+                "--base",
+                "main",
+                "--title",
+                "demo",
+                "--local-config",
+                str(effective),
+            ]
             captured = io.StringIO()
             with redirect_stderr(captured):
-                code = delivery_main(
+                allowed = delivery_main([*base, "--repo", "owner/demo-repo"])
+            self.assertEqual(allowed, 2)
+            self.assertNotIn("not in [delivery].repositories", captured.getvalue())
+            captured = io.StringIO()
+            with redirect_stderr(captured):
+                denied = delivery_main([*base, "--repo", "owner/other"])
+            self.assertEqual(denied, 2)
+            self.assertIn("not in [delivery].repositories", captured.getvalue())
+            captured = io.StringIO()
+            with redirect_stderr(captured):
+                merged = delivery_main(
                     [
-                        "ensure-pr",
+                        "merge",
                         "--author-config",
                         str(Path(directory) / "author"),
                         "--reviewer-config",
@@ -144,19 +204,19 @@ class DeliveryPolicyTests(unittest.TestCase):
                         "--reviewer-login",
                         "reviewer",
                         "--repo",
-                        "owner/other",
-                        "--branch",
-                        "topic",
-                        "--base",
-                        "main",
-                        "--title",
-                        "demo",
+                        "owner/demo-repo",
+                        "--pr",
+                        "1",
+                        "--sha",
+                        "a" * 40,
                         "--local-config",
                         str(effective),
                     ]
                 )
-            self.assertEqual(code, 2)
-            self.assertIn("not in [delivery].repositories", captured.getvalue())
+            self.assertEqual(merged, 2)
+            self.assertIn("merge requires delivery.mode=merge_if_ready", captured.getvalue())
+            effective.unlink()
+            self.assertFalse(effective.exists())
 
 
 class ConsumerJourneyTests(unittest.TestCase):
@@ -202,6 +262,7 @@ repositories = []
             install(root, home, local, state)
             self.assertTrue((home / "skills/engineering-delivery/SKILL.md").is_file())
             self.assertTrue((home / "harness/v23/delivery_policy.py").is_file())
+            self.assertTrue((home / "bin/delivery-policy.py").is_file())
             self.assertIn(
                 "timeout = " + str(HOOK_TIMEOUT_SECONDS), (home / "config.toml").read_text()
             )
@@ -236,6 +297,33 @@ repositories = []
             context = completed.stdout
             self.assertIn("daemon_probes=skipped", context)
             self.assertNotIn("cli_version=", context)
+            ephemeral = Path(directory) / "request delivery.toml"
+            policy_cli = subprocess.run(
+                [
+                    sys.executable,
+                    str(home / "bin/delivery-policy.py"),
+                    "effective",
+                    "--local-config",
+                    str(local),
+                    "--mode",
+                    "pull_request",
+                    "--repository",
+                    "owner/demo-repo",
+                    "--output",
+                    str(ephemeral),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+            self.assertEqual(policy_cli.returncode, 0, policy_cli.stderr)
+            self.assertEqual(
+                ephemeral.read_text(encoding="utf-8"),
+                '[delivery]\nmode = "pull_request"\nrepositories = ["owner/demo-repo"]\n',
+            )
+            self.assertNotIn("primary-model", ephemeral.read_text(encoding="utf-8"))
+            ephemeral.unlink()
             install(root, home, local, state)
             self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep me\n")
             uninstall(home, state)

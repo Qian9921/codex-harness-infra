@@ -48,7 +48,7 @@ Automatic selection prefers a single suitable paid/included executor. Multiple s
 
 ## Delivery
 
-Discussion is read-only. Publication follows explicit `[delivery]` (`local_only` default, `pull_request`, or `merge_if_ready` plus authorized repositories). An explicit current request for a named PR may use a request-scoped effective `--local-config` that replaces only `[delivery]`; the persistent file is unchanged. Installing or configuring credentials is not permission.
+Discussion is read-only. Publication follows explicit `[delivery]` (`local_only` default, `pull_request`, or `merge_if_ready` plus authorized repositories). An explicit current request for a named PR may use one request-delivery-only ephemeral `--local-config` that contains only `[delivery]`; reuse it for every publication command and remove it afterward. The persistent file is unchanged. Installing or configuring credentials is not permission.
 
 The author and reviewer use separate GitHub identities on the same machine. This is an audit and workflow boundary, not a claim of process isolation. The GitHub Pull Request, current head, checks, comments, and reviews are the durable delivery record.
 

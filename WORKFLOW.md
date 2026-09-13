@@ -69,14 +69,17 @@ The author and reviewer are different GitHub identities. The author must be the 
 Use the V23 delivery adapter for branch push, PR creation, GitHub review, and
 merge checks. Publication commands require `--local-config`. An explicit current
 request to open a named PR while standing policy is `local_only` is honored
-without re-asking and without rewriting the persistent config: write a
-request-scoped effective file that copies the local config and replaces only
-`[delivery]`, then pass that file as `--local-config`.
+without re-asking and without rewriting the persistent config: write one
+request-delivery-only ephemeral file containing only `[delivery]` with the
+exact requested mode and repository, reuse that same file for every publication
+command, then remove it after delivery. Do not copy the persistent config.
 
 ```text
 python scripts/delivery_policy.py effective --local-config <persistent.toml> \
-  --mode pull_request --repository <owner/name> --output <request.toml>
-python scripts/github_delivery.py ensure-pr --local-config <request.toml> ...
+  --mode pull_request --repository <owner/name> --output <ephemeral.toml>
+python scripts/github_delivery.py push --local-config <ephemeral.toml> ...
+python scripts/github_delivery.py ensure-pr --local-config <ephemeral.toml> ...
+rm <ephemeral.toml>
 ```
 
 Its push operation requires an explicit worktree and refspec and

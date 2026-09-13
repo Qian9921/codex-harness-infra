@@ -44,7 +44,7 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 
 ## 交付
 
-讨论任务保持只读。发布遵循明确的 `[delivery]`（默认 `local_only`，或 `pull_request` / `merge_if_ready` 加授权仓库）。当前用户对指定仓库的明确 PR 请求可用请求范围 effective `--local-config` 覆盖 standing `local_only`，不改持久文件。安装或配置凭据不是发布授权。
+讨论任务保持只读。发布遵循明确的 `[delivery]`（默认 `local_only`，或 `pull_request` / `merge_if_ready` 加授权仓库）。当前用户对指定仓库的明确 PR 请求可用仅含 `[delivery]` 的临时 `--local-config` 覆盖 standing `local_only`，全程复用同一文件并在交付后删除，不改持久文件。安装或配置凭据不是发布授权。
 
 作者和 Reviewer 在同一台机器上使用不同的 GitHub 身份。这是审计与工作流边界，不宣称进程或凭据隔离。GitHub Pull Request、当前 head、检查、评论和 Review 是交付的持久记录。
 

@@ -119,7 +119,7 @@ class HarnessScenarioEvals(unittest.TestCase):
     def test_normal_change_defaults_to_delivery(self) -> None:
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
         self.assertIn("Omitted `[delivery]` is `local_only`", workflow)
-        self.assertIn("request-scoped effective file", workflow)
+        self.assertIn("request-delivery-only ephemeral file", workflow)
         self.assertIn("understand → implement → verify → commit → push → Pull Request", workflow)
 
     def test_local_only_is_an_explicit_opt_out(self) -> None:

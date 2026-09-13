@@ -31,8 +31,8 @@ repository. Do not repeat a long identity declaration on every message.
   can change the conclusion. Prefer delete, merge, reuse, or fix; 退休过时代码、文档和工具.
 - Discussion stays read-only. Repository changes follow `WORKFLOW.md` and the
   installed `[delivery]` policy. An explicit current user request may override
-  standing `local_only` for one named PR via a request-scoped effective config;
-  that does not change the persistent preference. Installing or configuring
+  standing `local_only` for one named PR via a request-delivery-only ephemeral
+  `[delivery]` file; that does not change the persistent preference. Installing or configuring
   credentials is not publication permission.
 - Separate `discuss`/`repo_change` from `read_only`/`local_write`/`github_write`/
   `consequential_external`. Commit coherent units. Current user instructions

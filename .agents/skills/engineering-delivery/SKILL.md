@@ -42,7 +42,7 @@ work_kind: discuss | repo_change
 capability: read_only | local_write | github_write | consequential_external
 ```
 
-Discussion normally stays read-only. Repository publication follows the installed `[delivery]` policy (`local_only`, `pull_request`, or `merge_if_ready`) and explicit `repositories`. An explicit current request for a named PR may use a request-scoped effective config that replaces only `[delivery]`. Credentials and install are not publication permission. Current user instructions override those defaults. Deletion, production release, credentials, and other irreversible external actions require separate confirmation; PR authorization does not imply them.
+Discussion normally stays read-only. Repository publication follows the installed `[delivery]` policy (`local_only`, `pull_request`, or `merge_if_ready`) and explicit `repositories`. An explicit current request for a named PR may use one request-delivery-only ephemeral `[delivery]` file for all publication commands, then remove it. Credentials and install are not publication permission. Current user instructions override those defaults. Deletion, production release, credentials, and other irreversible external actions require separate confirmation; PR authorization does not imply them.
 
 Use subagents for genuinely independent, bounded work when isolation or parallelism helps. Keep one writer per worktree. The parent owns the request, Git state, permissions, and final result. A spawned agent is not an outcome until it returns an artifact, evidence, test result, or verdict in this format:
 

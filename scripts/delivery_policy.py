@@ -2,14 +2,15 @@
 
 Installing or configuring credentials is not publication permission.
 Omitted ``[delivery]`` is ``local_only`` with an empty repository set.
-A current user request may write a request-scoped effective config that
-replaces only ``[delivery]`` without mutating the persistent file.
+A current user request may write a request-delivery-only ephemeral file
+containing only ``[delivery]``. The persistent config is not copied or mutated.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -93,22 +94,6 @@ def assert_publication_allowed(policy: DeliveryPolicy, repo: str, action: str) -
         raise DeliveryError(f"unsupported delivery action: {action}")
 
 
-def strip_delivery_table(text: str) -> str:
-    """Return *text* with a top-level ``[delivery]`` table removed."""
-    kept: list[str] = []
-    skipping = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if stripped.startswith("[") and not stripped.startswith("[["):
-            closing = stripped.find("]")
-            name = stripped[1:closing].strip() if closing > 0 else ""
-            skipping = name == "delivery"
-        if skipping:
-            continue
-        kept.append(line)
-    return "".join(kept).rstrip() + ("\n" if kept else "")
-
-
 def render_delivery_table(mode: str, repositories: Sequence[str]) -> str:
     repos = ", ".join(json.dumps(item) for item in repositories)
     return f"[delivery]\nmode = {json.dumps(mode)}\nrepositories = [{repos}]\n"
@@ -117,24 +102,26 @@ def render_delivery_table(mode: str, repositories: Sequence[str]) -> str:
 def write_effective_config(
     source: Path, dest: Path, mode: str, repositories: Sequence[str]
 ) -> None:
-    """Copy *source* to *dest*, replacing only ``[delivery]``. Persistent file unchanged."""
-    text = source.read_text(encoding="utf-8")
+    """Validate *source* TOML and write only a request-delivery ``[delivery]`` table.
+
+    Persistent configuration is unchanged. The output path must differ from the
+    source and must not receive unrelated config, credentials, or user paths.
+    """
     try:
-        tomllib.loads(text)
+        tomllib.loads(source.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise DeliveryError(f"persistent local configuration is missing: {source}") from error
     except tomllib.TOMLDecodeError as error:
         raise DeliveryError(f"persistent local configuration is invalid: {error}") from error
-    policy = parse_delivery(
-        {"delivery": {"mode": mode, "repositories": [str(item) for item in repositories]}}
-    )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.resolve() == source.resolve():
+    requested = tuple(str(item).strip() for item in repositories)
+    policy = parse_delivery({"delivery": {"mode": mode, "repositories": list(requested)}})
+    dest_resolved = dest.expanduser().resolve()
+    source_resolved = source.expanduser().resolve()
+    if dest_resolved == source_resolved:
         raise DeliveryError("effective config must be a distinct path from the persistent file")
-    rendered = (
-        strip_delivery_table(text)
-        + "\n"
-        + render_delivery_table(policy.mode, sorted(policy.repositories))
-    )
-    dest.write_text(rendered, encoding="utf-8")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(render_delivery_table(policy.mode, requested), encoding="utf-8")
+    os.chmod(dest, 0o600)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -142,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     effective = sub.add_parser(
         "effective",
-        help="write a request-scoped config that replaces only [delivery]",
+        help="write a request-delivery-only [delivery] table to an ephemeral path",
     )
     effective.add_argument("--local-config", type=Path, required=True)
     effective.add_argument("--mode", required=True, choices=sorted(DELIVERY_MODES))
