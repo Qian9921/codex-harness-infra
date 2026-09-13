@@ -55,6 +55,7 @@ rtk = "rtk"
                 local,
                 ROOT / "tests",
                 check_github=False,
+                probe_required_tools=True,
                 tool_probe=lambda _cwd, _prompt, _tools: [
                     ToolResult("CodeGraph", True, "queried"),
                     ToolResult("Semble", True, "searched"),

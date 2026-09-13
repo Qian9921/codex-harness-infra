@@ -17,9 +17,11 @@ The JSON report always includes the complete denominator (`total`, `passed`,
 worktree was clean, and the suite's supported version, resolved path, and
 content digest. The digest is evidence for an explicitly supplied external
 suite: a repository HEAD alone cannot identify that file. A green offline
-result means that the tested Harness mechanics worked; it does not mean that an
-LLM followed prompts reliably, that token cost was acceptable, or that GitHub
-delivery succeeded remotely.
+result is a synthetic helper/eval, not a model-executed run. It does not mean
+that an LLM followed prompts reliably, that token or quota cost was acceptable,
+or that GitHub delivery succeeded remotely. Do not claim quota savings from
+static tests. Instruction-size and hook-time measurements are reported
+separately from unproven end-to-end efficiency.
 
 Use the optional local smoke only on a configured V23 machine:
 

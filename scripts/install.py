@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
+    from scripts.delivery_policy import DeliveryError, parse_delivery
     from scripts.executor_routing import (
         RoutingError,
         default_native_spec,
@@ -41,6 +42,7 @@ try:
     )
     from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
 except ModuleNotFoundError:  # Support the documented direct script entrypoint.
+    from delivery_policy import DeliveryError, parse_delivery  # type: ignore[no-redef]
     from executor_routing import (  # type: ignore[no-redef]
         RoutingError,
         default_native_spec,
@@ -52,7 +54,7 @@ except ModuleNotFoundError:  # Support the documented direct script entrypoint.
     )
     from task_bootstrap import HOOK_TIMEOUT_SECONDS
 
-VERSION = "23.2.0"
+VERSION = "23.3.0"
 MARKER = "CODEX-HARNESS-INFRA V23"
 PORTABLE_KIND = "PORTABLE"
 LOCAL_KIND = "LOCAL"
@@ -543,6 +545,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     bounded_search_source = repo_root / "scripts/bounded_search.py"
     routing_source = repo_root / "scripts/executor_routing.py"
     runtime_source = repo_root / "scripts/runtime.py"
+    delivery_source = repo_root / "scripts/delivery_policy.py"
     for source in (
         primary_template,
         executor_template,
@@ -554,6 +557,7 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         bounded_search_source,
         routing_source,
         runtime_source,
+        delivery_source,
     ):
         if not source.exists() or source.is_symlink():
             raise InstallError(f"invalid V23 source asset: {source}")
@@ -673,6 +677,16 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             runtime_source,
             "file",
         ),
+        Asset(
+            ensure_within(codex_home, codex_home / "bin/delivery-policy.py"),
+            delivery_source,
+            "file",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/delivery_policy.py"),
+            delivery_source,
+            "file",
+        ),
         *extra_executors,
     ]
 
@@ -790,6 +804,10 @@ def install(repo_root: Path, codex_home: Path, local_config: Path, state_dir: Pa
     state_dir = _safe_state_dir(state_dir)
     _prepare_state_dir(state_dir)
     config = read_toml(local_config)
+    try:
+        parse_delivery(config)
+    except DeliveryError as error:
+        raise InstallError(f"invalid delivery policy: {error}") from error
     runtime_python = resolve_python_runtime(config)
     manifest = _load_manifest(state_dir)
     portable = (repo_root / "package/global-portable.md").read_text().strip()

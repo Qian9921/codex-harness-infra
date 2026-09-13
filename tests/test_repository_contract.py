@@ -28,6 +28,7 @@ REQUIRED_FILES = {
     "scripts/github_delivery.py",
     "scripts/runtime.py",
     "scripts/task_bootstrap.py",
+    "scripts/delivery_policy.py",
 }
 
 
@@ -154,7 +155,8 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("不是可选路由", installed_portable)
         self.assertIn("按任务相关性使用", installed_portable)
         self.assertIn("不得阻断无关任务", installed_portable)
-        self.assertIn("默认自动进入 GitHub 交付", installed_portable)
+        self.assertIn("[delivery]", installed_portable)
+        self.assertIn("local_only", installed_portable)
         self.assertIn("意图审查", installed_portable)
         self.assertIn("不要求另一次明确“开始”", installed_portable)
         self.assertIn("request_user_input", installed_portable)
@@ -273,6 +275,33 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("def structured_answers_unanswered", bridge)
         self.assertNotIn("def apply_request_user_input", bridge)
         self.assertNotIn("def is_user_visible_update", bridge)
+
+    def test_trivial_exception_is_not_implementation_authorization(self) -> None:
+        for relative in ("AGENTS.md", "WORKFLOW.md", "package/global-portable.md"):
+            text = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("琐碎" if relative != "WORKFLOW.md" else "trivial", text)
+            self.assertTrue(
+                "不得当成实现" in text or "never authorize implementation" in text,
+                relative,
+            )
+
+    def test_review_loop_diagnoses_stall_not_max_rounds(self) -> None:
+        github = (ROOT / ".agents/skills/engineering-delivery/references/github-flow.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("Three rounds", github)
+        self.assertIn("stalled progress", github)
+        self.assertIn("external block", github)
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        self.assertIn("stalled progress", workflow)
+
+    def test_portable_instructions_stay_thin(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        self.assertLessEqual(len(agents), 7_500)
+        self.assertLessEqual(len(portable), 4_500)
+        self.assertNotIn("gpt-6-astra", agents)
+        self.assertNotIn("gpt-6-astra", portable)
 
 
 if __name__ == "__main__":

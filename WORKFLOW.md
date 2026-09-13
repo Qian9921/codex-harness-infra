@@ -9,15 +9,15 @@ Classify the task on two independent axes:
 | Work kind | Capability | Meaning |
 | --- | --- | --- |
 | `discuss` | `read_only` | Explain, investigate, or review without repository or GitHub writes. |
-| `repo_change` | `local_write` | Explicitly local-only change and relevant local checks. |
-| `repo_change` | `github_write` | Default delivery of a normal repository change through a Pull Request. |
+| `repo_change` | `local_write` | Local change and relevant local checks. |
+| `repo_change` | `github_write` | Pull Request delivery for an explicitly authorized repository. |
 | any | `consequential_external` | Affect production, accounts, data, releases, or another irreversible external system. |
 
-`repo_change + github_write` is the default under V23 standing authorization; use `local_write` only when the user explicitly requests local-only work. Neither authorizes unrelated external actions.
+Capability follows the installed `[delivery]` table, not an implied standing grant. Omitted `[delivery]` is `local_only`. `pull_request` and `merge_if_ready` require nonempty `repositories`. Installing the Harness or configuring GitHub credentials is not publication permission. Current user instructions override those defaults. Neither authorizes unrelated external actions.
 
 ## Participatory questioning
 
-This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery.
+This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly. Those exceptions never authorize implementation or publication by themselves. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery. Preserve intent across turns; separate facts from preferences; show evidence when a conclusion changes; state material assumptions only when they would change the decision.
 
 ## DISCUSS
 
@@ -25,12 +25,22 @@ For `discuss`, stay read-only. Only the simple/direct exceptions in Participator
 
 ## REPO_CHANGE
 
-For every repository change unless the user explicitly requests local-only work:
+For `local_only` (the portable default):
+
+```text
+understand → implement → verify → commit (when Git work is in scope)
+```
+
+Do not push, open a Pull Request, or merge.
+
+For `pull_request` on an authorized repository:
 
 ```text
 understand → implement → verify → commit → push → Pull Request
-          → fresh independent review → fix if needed → approval → merge
+          → fresh independent review → fix if needed → approval
 ```
+
+For `merge_if_ready` on an authorized repository, continue from a valid current-head approval through merge when required checks pass.
 
 The primary role owns the request, scope, decisions, verification, and final result. The locally selected execution route performs one bounded implementation, test, and fix pass and returns concise files, behavior, evidence, and unresolved items. When that route is Grok, effort is low and Luna-low supervises lifecycle and receipt only. Primary then runs targeted independent verification of those claims instead of duplicating the full implementation. `run`/`resume` wait without a wall-clock timeout while the dedicated Grok process group is genuinely alive and not a zombie. Dedicated-PGID cleanup, spawn-issued cleanup token (`start_new_session=True`), registry lock spanning SIGTERM/SIGHUP/SIGINT coordination, SIGKILL of the process group, and the post-exec launcher are required; every normal return and BaseException path drains remaining members. See `.agents/skills/grok-execution/references/grok-process-lifecycle.md`. All Codex Grok `run`/`resume` invocations MUST be supervised by a separately spawned generic Luna-low native subagent, distinct from `v23_executor`. That supervisor watches lifecycle and receipt only and never edits. The parent waits for the supervisor completion event and does not directly narrate or poll Grok. When Grok is selected, `v23_executor` remains the quota-exhaustion-only fallback and is not the supervisor; `native_only` uses that same agent as the complete Codex executor. The reviewer receives the request, current diff, relevant evidence, and current head SHA in fresh read-only context.
 
@@ -41,20 +51,21 @@ path. `paid_preferred` and `paid_strict` prefer a configured paid/included
 executor; configs without `[routing]` keep Grok-preferred execution with
 quota-only native fallback. Do not treat unknown quota as zero, do not migrate
 just because a new native slug exists, and do not label network/auth/timeout/
-bridge errors as quota. Primary remains decision-only.
+bridge errors as quota. Primary remains decision-only. Model names are frozen
+at install, update, or actual use of the local mapping; do not auto-upgrade
+shared policy to a new native version string.
 
 The author and reviewer are different GitHub identities. The author must be the GitHub actor that pushes the branch; on a shared machine, explicitly select the author's isolated Git credential helper instead of inheriting the default credential. The reviewer model's verdict, the GitHub approval, and GitHub's branch rules are separate facts. A review is valid only for the head SHA it inspected. Any later commit requires a new review.
 
 Use the V23 delivery adapter for branch push, PR creation, GitHub review, and
-merge checks. Its push operation requires an explicit worktree and refspec and
+merge checks. Publication commands require `--local-config`. Its push operation requires an explicit worktree and refspec and
 reads one raw local credential-free HTTPS `github.com` URL, then starts an
 otherwise config-isolated Git push with the configured author's GH_CONFIG_DIR
-credential helper. That excludes ambient Git credential/header configuration,
-environment injection variables, and URL rewrites.
+credential helper.
 
-Merge only after the current head has the required checks, no blocking unresolved feedback, and a valid approval from the configured reviewer identity. Let GitHub enforce repository rules; do not imitate them with a local process.
+Merge only after `delivery.mode=merge_if_ready`, the repository is listed, the current head has the required checks, no blocking unresolved feedback, and a valid approval from the configured reviewer identity.
 
-Commits should be small, complete, and understandable in one sitting. Keep related tests with the behavior they protect. Prefer delete, merge, reuse, or fix; retire superseded code, docs, and tools in the same change unless active compatibility requires them. Do not create noisy commits merely to increase the count.
+Commits should be small, complete, and understandable in one sitting. Keep related tests with the behavior they protect. Prefer delete, merge, reuse, or fix; retire superseded code, docs, and tools in the same change unless active compatibility requires them.
 
 ## CONSEQUENTIAL_EXTERNAL
 
@@ -66,7 +77,7 @@ Use subagents for independent read-heavy investigation, testing, or review when 
 
 ## Interruption and recovery
 
-The Pull Request and its current branch head are the durable delivery record. After an interruption, query GitHub and the checkout, then continue only with the next operation still needed. Do not create a second task database or duplicate workflow history.
+The local commits and, when authorized, the Pull Request and its current branch head are the durable delivery record. After an interruption, query GitHub and the checkout, then continue only with the next operation still needed. Diagnose stalled progress (same finding, no observable change) versus an actual external block (CI, permissions, missing approval, network). Do not stop because a review-round counter expired.
 
 ## Communication
 

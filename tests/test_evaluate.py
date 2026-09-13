@@ -118,12 +118,14 @@ class HarnessScenarioEvals(unittest.TestCase):
 
     def test_normal_change_defaults_to_delivery(self) -> None:
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
-        self.assertIn("`repo_change + github_write` is the default", workflow)
+        self.assertIn("Omitted `[delivery]` is `local_only`", workflow)
         self.assertIn("understand → implement → verify → commit → push → Pull Request", workflow)
 
     def test_local_only_is_an_explicit_opt_out(self) -> None:
         policy = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
-        self.assertIn("只有用户明确要求“仅本地”时才不外送", policy)
+        self.assertIn("local_only", policy)
+        example = (ROOT / "package/local.example.toml").read_text(encoding="utf-8")
+        self.assertIn('mode = "local_only"', example)
 
     def test_consequential_actions_stay_separate(self) -> None:
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")

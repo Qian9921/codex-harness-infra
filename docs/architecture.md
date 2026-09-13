@@ -12,7 +12,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Workflow agreement
 
-`WORKFLOW.md` defines the three work kinds and the authorized repository delivery path. It makes the difference between discussing a change, writing locally, writing to GitHub, and taking an irreversible external action explicit.
+`WORKFLOW.md` defines the three work kinds and the local `[delivery]` policy (`local_only`, `pull_request`, `merge_if_ready` plus explicit repositories). Installing or configuring credentials is not publication permission. Current user instructions override installed defaults.
 
 ### On-demand guidance
 
@@ -20,7 +20,7 @@ Codex Harness Infra adds only the durable policy and local-to-GitHub integration
 
 ### Small helpers and one native task hook
 
-`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, `scripts/bounded_search.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, live runtime-state injection, Harness-default bounded search, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that injects installed instructions and live runtime checks. Live runtime state is collected from `${CODEX_HOME}/harness/v23-state/install.json` and daemon/CLI probes; prior-task memory is historical only. Doctor summarizes the live installation, may probe CodeGraph/Semble/RTK on request, and does not re-enter the full task hook. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
+`scripts/install.py`, `scripts/doctor.py`, `scripts/task_bootstrap.py`, `scripts/bounded_search.py`, and `scripts/github_delivery.py` support local installation, actionable setup checks, live runtime-state injection, Harness-default bounded search, and the GitHub delivery adapter. The installer registers one UserPromptSubmit command hook that injects installed instructions and local integrity checks. Live runtime state is collected from `${CODEX_HOME}/harness/v23-state/install.json` and instruction/config files; daemon/CLI and CodeGraph/Semble/RTK probes are explicit Doctor flags. Prior-task memory is historical only. Doctor summarizes the live installation and does not re-enter the full task hook. It does not run a replacement agent loop, scheduler, background service, Stop hook, or permission system. The Pull Request and current head remain the durable workflow record.
 
 ## Work and capability
 
@@ -45,7 +45,7 @@ Independent read-heavy work can run in parallel. A worktree has one writer. Para
 
 - Keep the permanent context short and load detail progressively.
 - Prefer one coherent change that a reviewer can understand in one sitting.
-- Keep the single native prompt hook for installed instructions and live runtime checks; use CodeGraph, Semble, and RTK when they are task-relevant, and keep explicit Doctor probes.
+- Keep the single native prompt hook for installed instructions and local integrity checks; use CodeGraph, Semble, RTK, and daemon probes when they are task-relevant or explicitly requested.
 - Use project-native tools and checks before adding a new dependency.
 - Add a mechanism only when a concrete failure is identified and the existing mechanism cannot address it with less complexity.
 - Preserve user-authored local state outside the marked ownership boundary.

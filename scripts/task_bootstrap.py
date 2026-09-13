@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
+    from scripts.delivery_policy import DeliveryError, parse_delivery
     from scripts.executor_routing import (
         BACKEND_CODEX,
         RoutingError,
@@ -37,6 +38,7 @@ try:
     )
 except ModuleNotFoundError:  # Installed copy lives beside this hook script.
     try:
+        from delivery_policy import DeliveryError, parse_delivery
         from executor_routing import (
             BACKEND_CODEX,
             RoutingError,
@@ -57,6 +59,12 @@ except ModuleNotFoundError:  # Installed copy lives beside this hook script.
         def parse_policy(config: dict) -> object:
             return None
 
+        def parse_delivery(config: dict) -> object:
+            return None
+
+        class DeliveryError(RuntimeError):
+            """Placeholder when the delivery helper is absent."""
+
         def grok_checks_required(policy: object) -> bool:
             return True
 
@@ -75,15 +83,15 @@ except ModuleNotFoundError:  # Installed copy lives beside this hook script.
 CODEGRAPH_BEGIN = "# BEGIN CODEX-HARNESS-INFRA V23 CODEGRAPH"
 CODEGRAPH_END = "# END CODEX-HARNESS-INFRA V23 CODEGRAPH"
 REQUIRED_TOOLS = ("codegraph", "semble", "rtk")
-# Keep the worst-case synchronous sequence inside the native Hook timeout.
-# Measured floors: Semble search ~29.01s, `codex app-server daemon version` ~9.14s.
+# Default hook reads installed files only. Daemon JSON (~9s floor) stays
+# explicit via probe_daemons. Semble (~29s floor) stays on Doctor/probe_tools.
 GIT_DISCOVERY_TIMEOUT_SECONDS = 4
 CODEGRAPH_TIMEOUT_SECONDS = 14
 SEMBLE_TIMEOUT_SECONDS = 36
 RTK_TIMEOUT_SECONDS = 8
 LIVE_PROBE_TIMEOUT_SECONDS = 12
-HOOK_TIMEOUT_OVERHEAD_SECONDS = 10
-HOOK_TIMEOUT_SECONDS = LIVE_PROBE_TIMEOUT_SECONDS + HOOK_TIMEOUT_OVERHEAD_SECONDS
+HOOK_TIMEOUT_OVERHEAD_SECONDS = 8
+HOOK_TIMEOUT_SECONDS = HOOK_TIMEOUT_OVERHEAD_SECONDS
 DEFAULT_PRIMARY_EFFORT = "high"
 DEFAULT_EXECUTOR_EFFORT = "low"
 LIVE_STATE_CONTEXT_CAP = 1600
@@ -993,6 +1001,16 @@ def local_installation_checks(
                 rewritten.append((name, ok, detail))
         checks[:] = rewritten
     checks.append(("local_config", configured, str(local_config)))
+    try:
+        delivery = parse_delivery(local)
+        delivery_ok = True
+        delivery_detail = f"{getattr(delivery, 'mode', 'local_only')}"
+        if getattr(delivery, "repositories", None):
+            delivery_detail += f" repos={len(delivery.repositories)}"
+    except DeliveryError as error:
+        delivery_ok = False
+        delivery_detail = str(error)
+    checks.append(("delivery_policy", delivery_ok, delivery_detail))
     opening = local.get("opening", {})
     if opening is None:
         opening = {}
@@ -1102,37 +1120,51 @@ def collect_live_runtime_state(
     proc_net_unix: str | None = None,
     proc_root: Path = Path("/proc"),
     expected_uid: int | None = None,
+    probe_daemons: bool = False,
 ) -> list[LiveField]:
-    """Collect bounded live fields. ``memory_state`` is ignored on purpose."""
+    """Collect bounded live fields. ``memory_state`` is ignored on purpose.
+
+    Default path is installed policy/config integrity. Daemon/CLI probes run
+    only when ``probe_daemons`` is true (Doctor or an explicit relevant path).
+    """
     del cwd
     del memory_state
     runner = runner or _system_runner
     fields: list[LiveField] = []
     fields.extend(collect_install_state(state_dir))
-    version_fields, managed = collect_version_json(runner)
-    fields.extend(version_fields)
-    canonical = canonical_control_socket(codex_home)
-    socket_field = collect_control_socket(codex_home, proc_net_unix, expected_uid=expected_uid)
-    fields.append(socket_field)
-    fields.append(
-        collect_bound_daemon(
-            socket_field,
-            proc_root,
-            expected_uid=expected_uid,
-            expected_exe=_expected_codex_executable(managed),
-            canonical_socket=canonical,
-        )
-    )
     fields.extend(collect_instruction_state(codex_home))
     fields.append(collect_local_config_path(local_config))
     fields.append(collect_doctor_summary(codex_home, local_config))
+    if probe_daemons:
+        version_fields, managed = collect_version_json(runner)
+        fields.extend(version_fields)
+        canonical = canonical_control_socket(codex_home)
+        socket_field = collect_control_socket(codex_home, proc_net_unix, expected_uid=expected_uid)
+        fields.append(socket_field)
+        fields.append(
+            collect_bound_daemon(
+                socket_field,
+                proc_root,
+                expected_uid=expected_uid,
+                expected_exe=_expected_codex_executable(managed),
+                canonical_socket=canonical,
+            )
+        )
+    else:
+        fields.append(
+            _field_status(
+                "daemon_probes",
+                "skipped",
+                "explicit Doctor/--probe-daemons or relevant diagnosis path",
+            )
+        )
     return fields
 
 
 def render_live_state(fields: list[LiveField], *, cap: int = LIVE_STATE_CONTEXT_CAP) -> str:
     header = (
-        "V23 live runtime state (live probes of install.json and daemons; "
-        "memory of prior tasks is historical only): "
+        "V23 live runtime state (install manifest and instruction/config checks; "
+        "daemon probes are explicit; memory of prior tasks is historical only): "
     )
     body = "; ".join(field.render() for field in fields)
     text = SECRET_FRAGMENT.sub("[redacted]", header + body)
@@ -1143,9 +1175,9 @@ def render_live_state(fields: list[LiveField], *, cap: int = LIVE_STATE_CONTEXT_
 
 def _hook_context(live_state: str = "") -> str:
     header = (
-        "V23 prompt hook injected installed instructions and live runtime checks. "
-        "CodeGraph, Semble, and RTK are task-relevant; tool failure must not block "
-        "unrelated work. Explicit Doctor probes remain available."
+        "V23 prompt hook injected installed instructions and local integrity checks. "
+        "CodeGraph, Semble, RTK, and daemon probes are explicit or task-relevant; "
+        "tool failure must not block unrelated work. Doctor diagnosis remains available."
     )
     combined = f"{header} {live_state}".strip()
     if len(combined) > HOOK_CONTEXT_CAP:
@@ -1177,6 +1209,7 @@ def run_hook(
             runner=runner,
             memory_state=memory_state,
             proc_net_unix=proc_net_unix,
+            probe_daemons=False,
         )
         live_text = render_live_state(live)
     except (OSError, ValueError, TypeError) as error:

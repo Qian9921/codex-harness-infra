@@ -1,5 +1,8 @@
-# This is a local-only example. Copy it outside the repository and fill it with
-# your machine's model IDs, GitHub identities, and optional tool paths.
+# Copy this file outside the repository. Codex-only install works without
+# Grok, opening text, GitHub accounts, or optional tools. Fill models at
+# least. Native model slugs stay here; shared policy does not pin them.
+# Declared cost/capability is not live credits. Freshness is the mapping at
+# install, update, or actual use — do not auto-upgrade model names.
 
 [opening]
 instruction = ""
@@ -50,7 +53,14 @@ availability = "configured"
 # permit = ["quota_exhausted"]
 # target = "native"
 
+[delivery]
+# local_only (default) | pull_request | merge_if_ready
+# GitHub modes require nonempty repositories. Credentials are not permission.
+mode = "local_only"
+repositories = []
+
 [github]
+# Optional. Unused under local_only. Not an authorization grant.
 author_login = ""
 author_config_dir = ""
 reviewer_login = ""

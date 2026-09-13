@@ -2,7 +2,7 @@
 
 ## Normal path
 
-For every repository change unless the user explicitly requests local-only work:
+When `[delivery].mode` is `pull_request` or `merge_if_ready` and the repository is listed:
 
 ```text
 understand → implement → verify → commit → push → Pull Request

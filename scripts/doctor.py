@@ -25,11 +25,23 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 try:
+    from scripts.delivery_policy import DeliveryError, parse_delivery
     from scripts.install import effective_global_instruction
-    from scripts.task_bootstrap import ToolResult, local_installation_checks, probe_tools
+    from scripts.task_bootstrap import (
+        ToolResult,
+        collect_live_runtime_state,
+        local_installation_checks,
+        probe_tools,
+    )
 except ModuleNotFoundError:  # Support the documented `python scripts/doctor.py` entrypoint.
+    from delivery_policy import DeliveryError, parse_delivery
     from install import effective_global_instruction
-    from task_bootstrap import ToolResult, local_installation_checks, probe_tools
+    from task_bootstrap import (
+        ToolResult,
+        collect_live_runtime_state,
+        local_installation_checks,
+        probe_tools,
+    )
 
 
 def _result(name: str, ok: bool, detail: str) -> dict[str, object]:
@@ -90,7 +102,8 @@ def doctor(
     project: Path,
     check_github: bool = True,
     tool_probe: ToolProbe = probe_tools,
-    probe_required_tools: bool = True,
+    probe_required_tools: bool = False,
+    probe_daemons: bool = False,
 ) -> dict:
     checks: list[dict[str, object]] = []
     codex_home = codex_home.resolve()
@@ -109,7 +122,41 @@ def doctor(
             local = loaded
             raw_tools = local.get("tools", {})
             tools = raw_tools if isinstance(raw_tools, dict) else {}
+    skills_root = codex_home / "skills"
+    skill_names = []
+    if skills_root.is_dir():
+        skill_names = sorted(
+            path.name
+            for path in skills_root.iterdir()
+            if path.is_dir() and (path / "SKILL.md").is_file()
+        )
+    checks.append(
+        _result(
+            "installed_skills",
+            bool(skill_names),
+            ",".join(skill_names) or "no installed skills discovered",
+        )
+    )
+    runtime_python = local.get("runtime", {})
+    runtime_path = ""
+    if isinstance(runtime_python, dict):
+        runtime_path = str(runtime_python.get("python") or "")
+    checks.append(
+        _result(
+            "runtime_python",
+            True,
+            runtime_path or "interpreter chosen at install; optional [runtime].python",
+        )
+    )
     missing = [name for name in ("codegraph", "semble", "rtk") if not tools.get(name)]
+    if local_ok is not None and local_ok[1] and missing:
+        checks.append(
+            _result(
+                "tools_optional",
+                True,
+                "CodeGraph/Semble/RTK absent; skipped unless explicitly configured",
+            )
+        )
     if local_ok is not None and local_ok[1] and probe_required_tools and not missing:
         try:
             tool_results = tool_probe(project, "V23 Doctor health probe.", tools)
@@ -126,14 +173,6 @@ def doctor(
             )
         for result in tool_results:
             checks.append(_result(f"tool_{result.name.casefold()}", result.ok, result.detail))
-    elif local_ok is not None and local_ok[1] and probe_required_tools and missing:
-        checks.append(
-            _result(
-                "tools_optional",
-                True,
-                "CodeGraph/Semble/RTK absent; skipped unless explicitly configured",
-            )
-        )
     if check_github:
         if not local:
             try:
@@ -143,6 +182,11 @@ def doctor(
             if isinstance(loaded, dict):
                 local = loaded
         if local:
+            try:
+                delivery = parse_delivery(local)
+            except DeliveryError as error:
+                checks.append(_result("delivery_policy", False, str(error)))
+                delivery = None
             github = local.get("github", {})
             if github is None:
                 github = {}
@@ -158,7 +202,15 @@ def doctor(
                     "reviewer_config_dir",
                 )
             )
-            if not configured:
+            if delivery is not None and not delivery.github_write:
+                checks.append(
+                    _result(
+                        "github_delivery",
+                        True,
+                        "local_only; configured credentials are not publication authorization",
+                    )
+                )
+            elif not configured:
                 checks.append(
                     _result(
                         "github_delivery",
@@ -180,14 +232,37 @@ def doctor(
                         "same-machine audit identities must differ",
                     )
                 )
+    if probe_daemons:
+        try:
+            fields = collect_live_runtime_state(
+                cwd=project,
+                local_config=local_config,
+                codex_home=codex_home,
+                state_dir=codex_home / "harness/v23-state",
+                probe_daemons=True,
+            )
+        except (OSError, ValueError, TypeError) as error:
+            checks.append(_result("daemon_probes", False, str(error)))
+        else:
+            for field in fields:
+                if field.name in {"cli_version", "app_server", "control_socket", "bound_daemon"}:
+                    checks.append(
+                        _result(
+                            f"daemon_{field.name}",
+                            field.status == "ok",
+                            f"{field.status}:{field.detail}",
+                        )
+                    )
     return {
         "ok": all(bool(check["ok"]) for check in checks),
         "active_global_instruction": str(effective_global_instruction(codex_home)),
         "project_instruction_candidates": _agent_chain(project),
         "primary_profile_start": "codex --profile v23-primary",
+        "installed_skills": skill_names,
         "live_runtime_authority": (
-            "Current runtime state is collected live from "
-            "${CODEX_HOME}/harness/v23-state/install.json and daemon probes. "
+            "Current runtime state is collected from "
+            "${CODEX_HOME}/harness/v23-state/install.json and instruction/config "
+            "integrity. Daemon and tool probes are explicit. "
             "Prior-task memory is historical only and is not an authority."
         ),
         "checks": checks,
@@ -202,8 +277,25 @@ def main(argv: Iterable[str] | None = None) -> int:
     )
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--skip-github", action="store_true")
+    parser.add_argument(
+        "--probe-tools",
+        action="store_true",
+        help="run CodeGraph/Semble/RTK probes when those tools are configured",
+    )
+    parser.add_argument(
+        "--probe-daemons",
+        action="store_true",
+        help="run expensive Codex CLI/app-server daemon probes",
+    )
     args = parser.parse_args(argv)
-    result = doctor(args.codex_home, args.local_config, args.project, not args.skip_github)
+    result = doctor(
+        args.codex_home,
+        args.local_config,
+        args.project,
+        not args.skip_github,
+        probe_required_tools=args.probe_tools,
+        probe_daemons=args.probe_daemons,
+    )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

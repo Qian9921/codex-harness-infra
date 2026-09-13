@@ -2,7 +2,7 @@
 
 Use this card for repository changes delivered through a pull request. It complements, and does not replace, repository branch protection.
 
-Under V23, this is the default for normal repository changes; skip it only when the user explicitly requests local-only work.
+Use this path only when `[delivery].mode` is `pull_request` or `merge_if_ready` and the repository is listed. Installing or configuring credentials is not authorization.
 
 ## Flow
 
@@ -30,6 +30,6 @@ The local configuration maps author and reviewer roles to separate accounts on t
 - Resume from current GitHub state after interruption; retry only idempotent operations.
 - Keep secrets out of commits, PR text, logs, command arguments, and evidence.
 
-Use a bounded review/fix loop. Three rounds is the default upper bound for ordinary work. If the same finding repeats or a round makes no observable progress, stop and report the blocker.
+Use a bounded review/fix loop. If the same finding repeats or a round makes no observable progress, treat that as stalled progress and report it. If CI, permissions, missing approval, or network prevent the next step, treat that as an external block. Do not stop because a review-round counter expired.
 
 Make one logical change per commit. Keep tests with the behavior they verify. Do not manufacture commits for volume. Preserve intent, changed behavior, actual tests, findings, dispositions, and the final SHA in the PR; never paste private reasoning or noisy transcripts.
