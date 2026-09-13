@@ -323,6 +323,7 @@ class GHClient:
             title,
             "--body",
             body,
+            "--draft",
         )
         created = self._json(
             self._run("gh", "pr", "view", created_url, "--repo", repo, "--json", "number")
