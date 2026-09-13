@@ -17,6 +17,7 @@ ensure_supported_python(__file__)
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -130,8 +131,9 @@ class GHClient:
 
     @staticmethod
     def _json(output: str) -> object:
+        cleaned = re.sub(r"\x1b\[[0-9;]*m", "", output)
         try:
-            return json.loads(output)
+            return json.loads(cleaned)
         except json.JSONDecodeError as error:
             raise FlowError("GitHub CLI returned invalid JSON") from error
 
