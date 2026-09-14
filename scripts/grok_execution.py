@@ -194,6 +194,31 @@ REUSE_BEFORE_DECISION = (
     "brief check."
 )
 
+TOOL_SELECTION_GUIDANCE = (
+    "Known file, exact symbol, or exact text: bounded-search or a direct read. "
+    "Cross-file callers, dependencies, or impact: a focused CodeGraph query when "
+    "a usable owner index exists; read-only work may use a fresh usable index, "
+    "and must still check relevant current content rather than status alone. "
+    "Refresh a missing or stale index only under an authorized write executor; "
+    "otherwise trace source with bounded-search and state the limit. Unknown "
+    "implementation after insufficient bounded keywords: focused Semble in a "
+    "known repo or module, then inspect top files; query echo is not an answer. "
+    "Prefer available RTK for supported compact test summaries when full "
+    "diagnostics are unnecessary; use raw commands for unified diffs, "
+    "porcelain/JSON, and exact diagnostics. tgrep is "
+    "experimental, not a default backend, and is not installed by this Harness; "
+    "a user may already have it independently. If a command or flag is unknown "
+    "or the installed version differs, inspect that binary's --help and fall "
+    "back to baseline. Resolve an optional tool only from its configured path "
+    "or PATH via `command -v`; if unavailable, use baseline. Do not scan home, "
+    "tmp, or workspace trees, or inspect internal tool databases, merely to "
+    "discover setup. After sufficient evidence, do not probe again; availability "
+    "checking is not required on every task. Optional tools are selected only "
+    "for a concrete need, actually invoked when they fit, and missing or failed "
+    "tools fall back to baseline. This is prompt guidance, not a classifier or "
+    "gate."
+)
+
 _AUTHORIZED_WORK = (
     "Perform only the work the TASK actually authorizes, only in that directory. "
     "Read-only tasks investigate, report, and run relevant nonmutating checks. "
@@ -227,7 +252,8 @@ def _bound_prompt(
         f'python "{helper}" --root <repo-or-module> --pattern <pattern> [--path <file-or-dir>]. '
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "
         "scope and retry; never treat incomplete as no-match. Known individual-file reads "
-        "may stay direct. Do not bypass with grep or Python recursive scans.\n\n"
+        "may stay direct. Do not bypass with grep or Python recursive scans.\n"
+        f"{TOOL_SELECTION_GUIDANCE}\n\n"
         "TASK\n"
         f"{prompt}"
     )

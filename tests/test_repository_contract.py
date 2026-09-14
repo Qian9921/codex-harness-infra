@@ -59,9 +59,11 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("每条面向用户的 commentary", installed)
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
         self.assertIn("targeted independent read-only verification", workflow)
-        self.assertIn(
-            "bounded-search.py", (ROOT / "docs/tool-routing.md").read_text(encoding="utf-8")
-        )
+        tool_routing = (ROOT / "docs/tool-routing.md").read_text(encoding="utf-8")
+        self.assertIn("bounded-search.py", tool_routing)
+        self.assertIn("references/tool-routing.md", tool_routing)
+        self.assertIn("UserPromptSubmit", tool_routing)
+        self.assertIn("--probe-tools", tool_routing)
         self.assertNotRegex(agents, re.compile(r"/(?:Users|home)/"))
         self.assertNotRegex(agents, re.compile(r"(?i)(?:api[_-]?key|access[_-]?token|secret)\s*="))
 

@@ -207,6 +207,47 @@ class TaskBootstrapTests(unittest.TestCase):
             ]
             self.assertEqual(semble_timeouts, [SEMBLE_TIMEOUT_SECONDS])
 
+    def test_default_hook_does_not_probe_optional_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            tools = {}
+            for name in ("codegraph", "semble", "rtk"):
+                executable = root / name
+                executable.write_text("", encoding="utf-8")
+                executable.chmod(0o755)
+                tools[name] = str(executable)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "p"
+executor = "e"
+reviewer = "r"
+
+[tools]
+codegraph = "{codegraph}"
+semble = "{semble}"
+rtk = "{rtk}"
+""".format(**tools),
+                encoding="utf-8",
+            )
+            runner = FakeRunner(root)
+            payload = run_hook(
+                root,
+                "New task.",
+                local,
+                codex_home=root / "codex",
+                state_dir=root / "state",
+                runner=runner,
+            )
+            context = payload["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("task-relevant", context)
+            invoked = [command[0] for command, _cwd in runner.calls]
+            self.assertNotIn(tools["codegraph"], invoked)
+            self.assertNotIn(tools["semble"], invoked)
+            self.assertNotIn(tools["rtk"], invoked)
+
     def test_hook_timeout_budget_covers_live_runtime_only(self) -> None:
         self.assertGreaterEqual(SEMBLE_TIMEOUT_SECONDS, 36)
         self.assertGreaterEqual(LIVE_PROBE_TIMEOUT_SECONDS, 12)

@@ -53,7 +53,17 @@ Recursive content search defaults to the installed Harness helper
 exact repository, module, or explicit file set. 15s timeout; after timeout or
 incomplete, narrow and retry; never treat incomplete as no-match. Known
 individual-file reads may stay direct. Do not bypass with grep or Python.
-Provider and tool-selection detail: `.agents/skills/engineering-delivery/references/tool-routing.md`.
+Known file/exact symbol/text uses that helper or a direct read. Cross-file
+callers, dependencies, or impact: focused CodeGraph when a usable owner index
+exists; read-only work may use a fresh index and must check current content.
+Unknown implementation after insufficient keywords: focused Semble in a known
+repo/module. Compact supported pytest summaries: optional RTK; raw commands for
+diffs, porcelain/JSON, and exact diagnostics. tgrep is experimental, not a
+default backend, and is not installed by this Harness (a user may already have
+it). Unknown or version-different commands: inspect `--help`, then baseline.
+Optional tools are invoked only for a concrete need; missing or failed tools
+fall back to baseline. Detail:
+`.agents/skills/engineering-delivery/references/tool-routing.md`.
 
 ## Code review rules
 

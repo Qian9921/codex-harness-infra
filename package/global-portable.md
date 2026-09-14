@@ -14,7 +14,7 @@ swarms.
 
 不要为了显得严谨而新增 hash、冻结 contract、baseline、gate、仪表盘或多余抽象；优先删除、合并、复用或修复，并退休过时的代码、文档和工具。默认最小实现和最小必要验证；达到验收后停止。当前用户指令覆盖已安装默认。承诺或委派前先查当前调用路径与 owner helpers，再查已有依赖与邻接 API。Name or similarity is not fitness; copying is not reuse. 仅在有证据的缺口时才新写。重要设计/因果/性能承诺前用与主张匹配的证据；证据不足仍是假说。委派需目标、约束、已检候选证据、缺口与未知项。直白任务只需简短核对。
 
-实现、测试、数据运行、恢复和已授权 Git 写入按本地 executor routing 选择：`native_only` 是完整的 Codex 路径。选中后端的身份、监督、effort 与配额细节只加载对应 skill。未知配额是 unknown。用户 cost_preference 不是已核验余额或现场可用性。用已安装 `bin/executor-routing.py` 做可运行选择。递归内容搜索默认 `bin/bounded-search.py`（Harness 默认，不是 OS sandbox）；15 秒超时；超时或不完整须收窄后重试，不得当成无匹配。已知单文件读取可直接进行。搜索与 provider 细节按需加载 engineering-delivery `references/tool-routing.md`。空的结构化 `request_user_input` 答案视为未回答：任务保持暂停，resume 时原问重现，不得写入或推断默认值。
+实现、测试、数据运行、恢复和已授权 Git 写入按本地 executor routing 选择：`native_only` 是完整的 Codex 路径。选中后端的身份、监督、effort 与配额细节只加载对应 skill。未知配额是 unknown。用户 cost_preference 不是已核验余额或现场可用性。用已安装 `bin/executor-routing.py` 做可运行选择。递归内容搜索默认 `bin/bounded-search.py`（Harness 默认，不是 OS sandbox）；15 秒超时；超时或不完整须收窄后重试，不得当成无匹配。已知单文件读取可直接进行。已知文件/精确符号/文本用该 helper 或直接读。跨文件 callers/依赖/impact：owner index 可用时做 focused CodeGraph；只读可用新鲜可用 index，须核对当前源码。关键词不足后的未知实现：在已知 repo/module 做 focused Semble。紧凑 pytest 摘要：可选 RTK；diff、porcelain/JSON 与精确诊断用原始命令。tgrep 为实验性，不是默认后端，本 Harness 不安装它（用户可自备）。命令未知或版本不同时先看 `--help` 再回退 baseline。可选工具仅在有具体需要时调用；缺失或失败回退 baseline。搜索与 provider 细节按需加载 engineering-delivery `references/tool-routing.md`。空的结构化 `request_user_input` 答案视为未回答：任务保持暂停，resume 时原问重现，不得写入或推断默认值。
 
 唯一的 V23 UserPromptSubmit Hook 注入已安装说明与本地完整性检查，不是 Stop Hook。CodeGraph、Semble、RTK 按任务相关性使用，daemon 探针需显式 Doctor；工具失败不得阻断无关任务。同一 worktree 同时只允许一个 writer。停滞要区分自身无进展与真实外部阻塞，不以固定审查轮次停止。
 

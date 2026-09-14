@@ -766,9 +766,38 @@ REUSE_BEFORE_DECISION = (
     "brief check."
 )
 
+TOOL_SELECTION_GUIDANCE = (
+    "Known file, exact symbol, or exact text: bounded-search or a direct read. "
+    "Cross-file callers, dependencies, or impact: a focused CodeGraph query when "
+    "a usable owner index exists; read-only work may use a fresh usable index, "
+    "and must still check relevant current content rather than status alone. "
+    "Refresh a missing or stale index only under an authorized write executor; "
+    "otherwise trace source with bounded-search and state the limit. Unknown "
+    "implementation after insufficient bounded keywords: focused Semble in a "
+    "known repo or module, then inspect top files; query echo is not an answer. "
+    "Prefer available RTK for supported compact test summaries when full "
+    "diagnostics are unnecessary; use raw commands for unified diffs, "
+    "porcelain/JSON, and exact diagnostics. tgrep is "
+    "experimental, not a default backend, and is not installed by this Harness; "
+    "a user may already have it independently. If a command or flag is unknown "
+    "or the installed version differs, inspect that binary's --help and fall "
+    "back to baseline. Resolve an optional tool only from its configured path "
+    "or PATH via `command -v`; if unavailable, use baseline. Do not scan home, "
+    "tmp, or workspace trees, or inspect internal tool databases, merely to "
+    "discover setup. After sufficient evidence, do not probe again; availability "
+    "checking is not required on every task. Optional tools are selected only "
+    "for a concrete need, actually invoked when they fit, and missing or failed "
+    "tools fall back to baseline. This is prompt guidance, not a classifier or "
+    "gate."
+)
+
 
 def reuse_before_decision_instructions() -> str:
     return REUSE_BEFORE_DECISION
+
+
+def tool_selection_instructions() -> str:
+    return TOOL_SELECTION_GUIDANCE
 
 
 def executor_agent_description(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
@@ -781,6 +810,7 @@ def executor_agent_description(policy: RoutingPolicy, spec: ExecutorSpec | None 
 
 def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
     reuse = reuse_before_decision_instructions()
+    tools = tool_selection_instructions()
     if spec is not None and is_fallback_only_role(policy, spec):
         return (
             "You are the native fallback executor for one scoped change. Act only when the\n"
@@ -790,7 +820,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "authentication, network, or timeout errors are not quota exhaustion. Otherwise\n"
             "stop with GROK_FALLBACK_NOT_AUTHORIZED. When authorized, make the smallest\n"
             "complete change, keep one writer per worktree, and leave concise test evidence.\n"
-            f"{reuse} "
+            f"{reuse} {tools} "
             "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
             "concrete failure mode that ordinary version control, types, tests, or platform\n"
             "controls cannot handle. Escalate only real ambiguity or consequential external\n"
@@ -807,7 +837,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "this agent only with a bound QUOTA_EXHAUSTED receipt; network, auth, timeout,\n"
             "and bridge errors are not quota. Make the smallest complete change, keep one\n"
             "writer per worktree, and leave concise test evidence. "
-            f"{reuse} "
+            f"{reuse} {tools} "
             "Primary remains\n"
             "decision-only; do not assign implementation back to primary."
         )
@@ -817,7 +847,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "native_only route is complete: Grok is not required and no quota receipt is\n"
             "needed. Make the smallest complete change, keep one writer per worktree, and\n"
             "leave concise test evidence. "
-            f"{reuse} "
+            f"{reuse} {tools} "
             "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
             "concrete failure mode that ordinary version control, types, tests, or platform\n"
             "controls cannot handle. Escalate only real ambiguity or consequential external\n"
@@ -829,7 +859,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
         "routing mode. This candidate is a normal selectable executor, not a Grok quota\n"
         "fallback, and no quota receipt is required. Make the smallest complete change,\n"
         "keep one writer per worktree, and leave concise test evidence. "
-        f"{reuse} "
+        f"{reuse} {tools} "
         "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
         "concrete failure mode that ordinary version control, types, tests, or platform\n"
         "controls cannot handle. Escalate only real ambiguity or consequential external\n"

@@ -73,6 +73,13 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertIn("Timeout is 15 seconds", wrapper)
         self.assertIn("never treat incomplete as no-match", wrapper)
         self.assertIn("narrow the scope", wrapper)
+        self.assertIn("Optional tools are selected only for a concrete need", wrapper)
+        self.assertIn("tgrep is experimental", wrapper)
+        self.assertIn("not installed by this Harness", wrapper)
+        self.assertIn("inspect that binary's --help", wrapper)
+        self.assertIn("command -v", wrapper)
+        self.assertIn("internal tool databases", wrapper)
+        self.assertIn("fall back to baseline", wrapper)
         self.assertEqual(task, "do work")
 
     def test_bound_prompt_wrapper_does_not_keyword_classify_task_intent(self) -> None:

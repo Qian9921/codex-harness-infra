@@ -1369,6 +1369,25 @@ target = "native"
                 self.assertNotIn("_write_work_authorized", grok_bridge)
                 portable = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
                 self.assertIn(marker, portable)
+                tool_marker = "Optional tools are selected only for a concrete need"
+                self.assertIn(tool_marker, installed)
+                self.assertIn("TOOL_SELECTION_GUIDANCE", grok_bridge)
+                self.assertIn("not installed by this Harness", grok_bridge)
+                self.assertIn("command -v", grok_bridge)
+                self.assertIn('f"{TOOL_SELECTION_GUIDANCE}', grok_bridge)
+                self.assertIn("tgrep 为实验性", portable)
+                self.assertIn("本 Harness 不安装它", portable)
+                self.assertIn("focused CodeGraph", portable)
+                self.assertIn("可选工具仅在有具体需要时调用", portable)
+                routing_text = (
+                    codex_home / "skills/engineering-delivery/references/tool-routing.md"
+                ).read_text(encoding="utf-8")
+                self.assertIn("codegraph callers", routing_text)
+                self.assertIn("status --json", routing_text)
+                self.assertIn("rtk pytest", routing_text)
+                self.assertIn("command -v", routing_text)
+                self.assertNotIn("status -p", routing_text)
+                self.assertFalse((codex_home / "skills/codegraph/SKILL.md").exists())
 
 
 if __name__ == "__main__":
