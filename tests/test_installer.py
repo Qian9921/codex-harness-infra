@@ -1373,6 +1373,7 @@ target = "native"
                 self.assertIn(tool_marker, installed)
                 self.assertIn("TOOL_SELECTION_GUIDANCE", grok_bridge)
                 self.assertIn("not installed by this Harness", grok_bridge)
+                self.assertIn("command -v", grok_bridge)
                 self.assertIn('f"{TOOL_SELECTION_GUIDANCE}', grok_bridge)
                 self.assertIn("tgrep 为实验性", portable)
                 self.assertIn("本 Harness 不安装它", portable)
@@ -1384,6 +1385,7 @@ target = "native"
                 self.assertIn("codegraph callers", routing_text)
                 self.assertIn("status --json", routing_text)
                 self.assertIn("rtk pytest", routing_text)
+                self.assertIn("command -v", routing_text)
                 self.assertNotIn("status -p", routing_text)
                 self.assertFalse((codex_home / "skills/codegraph/SKILL.md").exists())
 

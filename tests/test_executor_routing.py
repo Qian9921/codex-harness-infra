@@ -689,6 +689,8 @@ target = "native"
             self.assertIn("not installed by this Harness", instructions)
             self.assertIn("inspect that binary's --help", instructions)
             self.assertIn("fresh usable index", instructions)
+            self.assertIn("command -v", instructions)
+            self.assertIn("internal tool databases", instructions)
             if label == "quota_fallback":
                 self.assertTrue(is_fallback_only_role(policy, spec))
             else:

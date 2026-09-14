@@ -13,7 +13,7 @@ work. This is prompt guidance, not a classifier or gate.
 | Known file, exact symbol, or exact text | `bin/bounded-search.py` or a direct read | Always the baseline. |
 | Cross-file callers, dependencies, or impact | CodeGraph | Configured binary, owner index, current content. |
 | Unknown implementation after insufficient keywords | Semble | Focused known repo/module; inspect top files. |
-| Compact supported pytest summary | `rtk pytest` | Details unnecessary; optional. Harness does not install it. |
+| Compact supported pytest summary | `rtk pytest` | Prefer when available and full diagnostics are unnecessary. Harness does not install it. |
 | Diff, porcelain/JSON, exact diagnostics | Raw commands | Do not wrap the shell. |
 | Experimental text search | tgrep | Not a default backend. Harness does not install it; a user may have it. |
 
@@ -69,6 +69,16 @@ tgrep is experimental, not a default backend, and is not installed by this
 Harness; a user may already have it. Mention freshness/resource cost only if
 used; implement no adapter. Unknown or version-different commands: inspect
 `--help`, then baseline.
+
+Resolve an optional tool only from its configured path or PATH via
+`command -v`. If it is unavailable, use baseline. Do not scan home, tmp, or
+workspace trees, or inspect internal tool databases, merely to discover
+setup. After sufficient evidence, do not probe again. Availability checking
+is not required on every task.
+
+Prefer available RTK for supported compact test summaries when full
+diagnostics are unnecessary. Use raw commands for exact details. Do not
+force RTK on a decisive diagnostic task.
 
 The CodeGraph cache is Git-local and ignored through a V23-marked info/exclude
 block; it is not committed and no daemon is started.
