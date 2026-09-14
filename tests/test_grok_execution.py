@@ -53,12 +53,25 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertIn("changed files, behavior, evidence", text)
         self.assertIn("targeted independent verification", text)
         self.assertIn("Luna supervises lifecycle", text)
+        self.assertIn("Name or similarity is not fitness", text)
         self.assertIn("/tmp/codex-home-for-prompt/bin/bounded-search.py", text)
         self.assertIn("Harness default helper (not an OS sandbox)", text)
         self.assertIn("Timeout is 15 seconds", text)
         self.assertIn("never treat incomplete as no-match", text)
         self.assertIn("narrow the scope", text)
         self.assertIn("TASK\ndo work", text)
+
+    def test_bound_prompt_omits_implementation_for_read_only_investigation(self) -> None:
+        text = grok_execution._bound_prompt(
+            "Investigate the routing helper. Read-only; do not implement.",
+            pathlib.Path("/workspace"),
+            task_id="task-ro",
+            owned_paths=["/workspace/owned"],
+        )
+        self.assertIn("without implementation, tests, or fixes", text)
+        self.assertNotIn("including implementation, tests, and fixes", text)
+        self.assertIn("Name or similarity is not fitness", text)
+        self.assertIn("TASK\nInvestigate the routing helper", text)
 
     def test_run_and_resume_default_to_no_timeout(self) -> None:
         run_args = grok_execution.parse_args(

@@ -176,6 +176,42 @@ def _bounded_search_helper() -> pathlib.Path:
     return _codex_home() / "bin/bounded-search.py"
 
 
+REUSE_BEFORE_DECISION = (
+    "Before commitment or delegation, inspect the current call path and owner "
+    "helpers, then existing dependencies and neighbor APIs; use external sources "
+    "only if needed. Verify semantic contract, units, precision, errors, and "
+    "performance as relevant. Name or similarity is not fitness; copying is not "
+    "reuse. New implementation is allowed only with an evidenced gap. "
+    "Straightforward tasks need only a brief check."
+)
+
+_READ_KIND_MARKERS = (
+    "read-only",
+    "readonly",
+    "investigate",
+    "investigation",
+    "do not implement",
+    "without implementation",
+    "discuss without changing",
+)
+_WRITE_KIND_MARKERS = (
+    "repo_change",
+    "local_write",
+    "github_write",
+    "authorized write",
+    "including implementation",
+    "implement the",
+    "implementation, tests, and fixes",
+)
+
+
+def _write_work_authorized(prompt: str) -> bool:
+    text = " ".join(prompt.casefold().split())
+    write = any(marker in text for marker in _WRITE_KIND_MARKERS)
+    read = any(marker in text for marker in _READ_KIND_MARKERS)
+    return write or not read
+
+
 def _bound_prompt(
     prompt: str,
     cwd: pathlib.Path,
@@ -184,17 +220,37 @@ def _bound_prompt(
     owned_paths: Sequence[str],
 ) -> str:
     helper = _bounded_search_helper()
+    if _write_work_authorized(prompt):
+        work = (
+            "Complete this bounded task, including implementation, tests, and fixes, only in "
+            "that directory. "
+        )
+        result = (
+            "Return a concise result covering changed files, behavior, evidence, "
+            "and unresolved items. The parent will run targeted independent verification "
+            "instead of duplicating the full implementation. "
+        )
+    else:
+        work = (
+            "Investigate this bounded task without implementation, tests, or fixes unless "
+            "the TASK explicitly authorizes that work kind. Work only in that directory. "
+        )
+        result = (
+            "Return a concise result covering evidence and unresolved items. The parent "
+            "will run targeted independent verification instead of duplicating the work. "
+        )
     return (
         "You are grok_execution, the preferred external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
         f"Task ID: {task_id}\n"
-        "Exclusive writable paths: " + ", ".join(owned_paths) + "\n"
-        "Complete this bounded task, including implementation, tests, and fixes, only in "
-        "that directory. Preserve unrelated changes. Do not commit unless explicitly "
-        "authorized. Return a concise result covering changed files, behavior, evidence, "
-        "and unresolved items. The parent will run targeted independent verification "
-        "instead of duplicating the full implementation. Luna supervises lifecycle and "
+        "Exclusive writable paths: "
+        + ", ".join(owned_paths)
+        + "\n"
+        + work
+        + "Preserve unrelated changes. Do not commit unless explicitly "
+        "authorized. " + result + "Luna supervises lifecycle and "
         "receipt only.\n"
+        f"{REUSE_BEFORE_DECISION}\n"
         "Recursive content search MUST use the Harness default helper (not an OS sandbox): "
         f'python "{helper}" --root <repo-or-module> --pattern <pattern> [--path <file-or-dir>]. '
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "

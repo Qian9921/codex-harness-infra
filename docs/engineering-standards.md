@@ -5,6 +5,9 @@ These are concise operating standards for work performed through this repository
 ## Change quality
 
 - Define the requested behavior before choosing an implementation.
+- Inspect the current call path and owner helpers, then existing dependencies
+  and neighbor APIs, before commitment or a new implementation. Name similarity
+  is not fitness; copying is not reuse; new code needs an evidenced gap.
 - Prefer the smallest design that satisfies that behavior.
 - Keep one change internally coherent and easy to review.
 - Separate unrelated refactoring, formatting, generated output, and behavior changes unless combining them is clearly safer.
