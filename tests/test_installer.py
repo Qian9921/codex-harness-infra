@@ -1364,7 +1364,9 @@ target = "native"
                     self.assertNotIn("native_only route is complete", template)
                 grok_bridge = (codex_home / "bin/grok-execution.py").read_text(encoding="utf-8")
                 self.assertIn(marker, grok_bridge)
-                self.assertIn("without implementation, tests, or fixes", grok_bridge)
+                self.assertIn("Perform only the work the TASK actually authorizes", grok_bridge)
+                self.assertIn("claim-appropriate evidence", grok_bridge)
+                self.assertNotIn("_write_work_authorized", grok_bridge)
                 portable = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
                 self.assertIn(marker, portable)
 

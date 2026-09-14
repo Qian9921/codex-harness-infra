@@ -1,26 +1,12 @@
-# Reuse-before-decision fixtures
+# Forward packs
 
-Disposable artifact packs for independent forward testing. They are not a
-model-quality suite and do not encode an answer label or checklist.
+Tiny stdlib-only directories. Hand `case01`–`case04` to an executor as working
+trees. Do not treat a green unittest as model `pass@k`.
 
-Run locally:
+case01–case03: read `task.md`, then edit and run `app.py` as that file
+describes. case04 is report-only.
 
 ```bash
-python -m unittest tests.test_reuse_evidence_fixtures -v
+python3 app.py 65000          # case01, case02
+python3 app.py sample.json    # case03
 ```
-
-Limits: no network; no extra packages; files stay tiny. A parent session may
-hand one pack to an executor and inspect whether it reused, rejected a
-lookalike, called a neighbor API, or revised a causal claim from evidence.
-Do not treat these files as `pass@k` or token-cost evidence.
-
-Packs:
-
-- `exact-function` — `format_duration_ms` already implements the requested
-  millisecond duration string.
-- `similar-name` — `format_duration` formats a wall-clock timestamp, not an
-  elapsed duration.
-- `neighbor-dep` — `records.py` already parses the JSON object the caller
-  needs.
-- `contradict-hypothesis` — `notes.md` guesses a missing import; `run.log`
-  shows a 15s timeout instead.

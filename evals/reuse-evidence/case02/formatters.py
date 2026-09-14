@@ -1,4 +1,4 @@
-"""Display helpers. Names are close; contracts differ."""
+"""Display helpers."""
 
 from datetime import UTC, datetime
 

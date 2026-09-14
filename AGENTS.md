@@ -31,10 +31,12 @@ repository. Do not repeat a long identity declaration on every message.
   can change the conclusion. Prefer delete, merge, reuse, or fix; 退休过时代码、文档和工具.
   Before commitment or delegation, inspect the current call path and owner
   helpers, then existing dependencies and neighbor APIs; use external sources
-  only if needed. Verify semantic contract, units, precision, errors, and
-  performance as relevant. Name or similarity is not fitness; copying is not
-  reuse. New implementation is allowed only with an evidenced gap.
-  Straightforward tasks need only a brief check.
+  only if needed. Name or similarity is not fitness; copying is not reuse.
+  New implementation is allowed only with an evidenced gap. Claim-appropriate
+  evidence before design, causal, or performance commitment; insufficient
+  evidence stays a hypothesis. Delegation sends goal, constraints, inspected
+  candidate evidence, the gap, and unknowns. Straightforward tasks need only
+  a brief check. Details: engineering-delivery skill.
 - Discussion stays read-only. Repository changes follow `WORKFLOW.md` and the
   installed `[delivery]` policy. An explicit current user request may override
   standing `local_only` for one named PR via a request-delivery-only ephemeral

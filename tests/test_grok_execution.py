@@ -49,29 +49,57 @@ class GrokExecutionTests(unittest.TestCase):
                 task_id="task-1",
                 owned_paths=["/workspace/owned"],
             )
-        self.assertIn("implementation, tests, and fixes", text)
-        self.assertIn("changed files, behavior, evidence", text)
-        self.assertIn("targeted independent verification", text)
-        self.assertIn("Luna supervises lifecycle", text)
-        self.assertIn("Name or similarity is not fitness", text)
-        self.assertIn("/tmp/codex-home-for-prompt/bin/bounded-search.py", text)
-        self.assertIn("Harness default helper (not an OS sandbox)", text)
-        self.assertIn("Timeout is 15 seconds", text)
-        self.assertIn("never treat incomplete as no-match", text)
-        self.assertIn("narrow the scope", text)
-        self.assertIn("TASK\ndo work", text)
-
-    def test_bound_prompt_omits_implementation_for_read_only_investigation(self) -> None:
-        text = grok_execution._bound_prompt(
-            "Investigate the routing helper. Read-only; do not implement.",
-            pathlib.Path("/workspace"),
-            task_id="task-ro",
-            owned_paths=["/workspace/owned"],
+        wrapper, _, task = text.partition("TASK\n")
+        self.assertIn("Perform only the work the TASK actually authorizes", wrapper)
+        self.assertIn(
+            "Read-only tasks investigate, report, and run relevant nonmutating checks", wrapper
         )
-        self.assertIn("without implementation, tests, or fixes", text)
-        self.assertNotIn("including implementation, tests, and fixes", text)
-        self.assertIn("Name or similarity is not fitness", text)
-        self.assertIn("TASK\nInvestigate the routing helper", text)
+        self.assertIn(
+            "Implementation, tests, and fixes apply only with authorized write work", wrapper
+        )
+        self.assertNotIn(
+            "Complete this bounded task, including implementation, tests, and fixes", wrapper
+        )
+        self.assertNotIn("without implementation, tests, or fixes", wrapper)
+        self.assertIn("changed files when writes occurred", wrapper)
+        self.assertIn("targeted independent verification", wrapper)
+        self.assertIn("Luna supervises lifecycle", wrapper)
+        self.assertIn("Name or similarity is not fitness", wrapper)
+        self.assertIn("claim-appropriate evidence", wrapper)
+        self.assertIn("Insufficient evidence remains a working hypothesis", wrapper)
+        self.assertIn("do not prescribe a new component while the choice is unsettled", wrapper)
+        self.assertIn("/tmp/codex-home-for-prompt/bin/bounded-search.py", wrapper)
+        self.assertIn("Harness default helper (not an OS sandbox)", wrapper)
+        self.assertIn("Timeout is 15 seconds", wrapper)
+        self.assertIn("never treat incomplete as no-match", wrapper)
+        self.assertIn("narrow the scope", wrapper)
+        self.assertEqual(task, "do work")
+
+    def test_bound_prompt_wrapper_does_not_keyword_classify_task_intent(self) -> None:
+        tasks = (
+            "只读调查这段路由说明，不要改文件。",
+            "Do not implement the helper; report what it already does.",
+            "This is a read-only review of a repo_change discussion; no writes.",
+            "Audit report only: summarize owner helpers without changing them.",
+        )
+        wrappers: list[str] = []
+        for prompt in tasks:
+            text = grok_execution._bound_prompt(
+                prompt,
+                pathlib.Path("/workspace"),
+                task_id="task-ro",
+                owned_paths=["/workspace/owned"],
+            )
+            wrapper, _, task = text.partition("TASK\n")
+            self.assertEqual(task, prompt)
+            self.assertIn("Perform only the work the TASK actually authorizes", wrapper)
+            self.assertNotIn(
+                "Complete this bounded task, including implementation, tests, and fixes",
+                wrapper,
+            )
+            self.assertNotIn("without implementation, tests, or fixes unless", wrapper)
+            wrappers.append(wrapper)
+        self.assertEqual(len(set(wrappers)), 1)
 
     def test_run_and_resume_default_to_no_timeout(self) -> None:
         run_args = grok_execution.parse_args(

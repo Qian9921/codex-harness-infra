@@ -753,8 +753,17 @@ REUSE_BEFORE_DECISION = (
     "helpers, then existing dependencies and neighbor APIs; use external sources "
     "only if needed. Verify semantic contract, units, precision, errors, and "
     "performance as relevant. Name or similarity is not fitness; copying is not "
-    "reuse. New implementation is allowed only with an evidenced gap. "
-    "Straightforward tasks need only a brief check."
+    "reuse. New implementation is allowed only with an evidenced gap. Before an "
+    "important design, causal, or performance commitment, identify "
+    "claim-appropriate evidence: source that supports static behavior, a "
+    "reproduction or runtime observation for causes, measurement for "
+    "performance, and algorithm-assumption fit. Insufficient evidence remains a "
+    "working hypothesis; take the smallest check that could change the "
+    "decision. User goals, budgets, and preferences are constraints, not "
+    "factual proof. When delegating, send the goal, constraints, inspected "
+    "candidate evidence, the actual gap, and unknowns; do not prescribe a new "
+    "component while the choice is unsettled. Straightforward tasks need only a "
+    "brief check."
 )
 
 

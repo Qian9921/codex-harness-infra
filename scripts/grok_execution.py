@@ -181,35 +181,29 @@ REUSE_BEFORE_DECISION = (
     "helpers, then existing dependencies and neighbor APIs; use external sources "
     "only if needed. Verify semantic contract, units, precision, errors, and "
     "performance as relevant. Name or similarity is not fitness; copying is not "
-    "reuse. New implementation is allowed only with an evidenced gap. "
-    "Straightforward tasks need only a brief check."
+    "reuse. New implementation is allowed only with an evidenced gap. Before an "
+    "important design, causal, or performance commitment, identify "
+    "claim-appropriate evidence: source that supports static behavior, a "
+    "reproduction or runtime observation for causes, measurement for "
+    "performance, and algorithm-assumption fit. Insufficient evidence remains a "
+    "working hypothesis; take the smallest check that could change the "
+    "decision. User goals, budgets, and preferences are constraints, not "
+    "factual proof. When delegating, send the goal, constraints, inspected "
+    "candidate evidence, the actual gap, and unknowns; do not prescribe a new "
+    "component while the choice is unsettled. Straightforward tasks need only a "
+    "brief check."
 )
 
-_READ_KIND_MARKERS = (
-    "read-only",
-    "readonly",
-    "investigate",
-    "investigation",
-    "do not implement",
-    "without implementation",
-    "discuss without changing",
+_AUTHORIZED_WORK = (
+    "Perform only the work the TASK actually authorizes, only in that directory. "
+    "Read-only tasks investigate, report, and run relevant nonmutating checks. "
+    "Implementation, tests, and fixes apply only with authorized write work. "
+    "Preserve unrelated changes. Do not commit unless explicitly authorized. "
+    "Return a concise result covering changed files when writes occurred, "
+    "behavior, evidence, and unresolved items. The parent will run targeted "
+    "independent verification instead of duplicating the work. Luna supervises "
+    "lifecycle and receipt only.\n"
 )
-_WRITE_KIND_MARKERS = (
-    "repo_change",
-    "local_write",
-    "github_write",
-    "authorized write",
-    "including implementation",
-    "implement the",
-    "implementation, tests, and fixes",
-)
-
-
-def _write_work_authorized(prompt: str) -> bool:
-    text = " ".join(prompt.casefold().split())
-    write = any(marker in text for marker in _WRITE_KIND_MARKERS)
-    read = any(marker in text for marker in _READ_KIND_MARKERS)
-    return write or not read
 
 
 def _bound_prompt(
@@ -220,25 +214,6 @@ def _bound_prompt(
     owned_paths: Sequence[str],
 ) -> str:
     helper = _bounded_search_helper()
-    if _write_work_authorized(prompt):
-        work = (
-            "Complete this bounded task, including implementation, tests, and fixes, only in "
-            "that directory. "
-        )
-        result = (
-            "Return a concise result covering changed files, behavior, evidence, "
-            "and unresolved items. The parent will run targeted independent verification "
-            "instead of duplicating the full implementation. "
-        )
-    else:
-        work = (
-            "Investigate this bounded task without implementation, tests, or fixes unless "
-            "the TASK explicitly authorizes that work kind. Work only in that directory. "
-        )
-        result = (
-            "Return a concise result covering evidence and unresolved items. The parent "
-            "will run targeted independent verification instead of duplicating the work. "
-        )
     return (
         "You are grok_execution, the preferred external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
@@ -246,11 +221,8 @@ def _bound_prompt(
         "Exclusive writable paths: "
         + ", ".join(owned_paths)
         + "\n"
-        + work
-        + "Preserve unrelated changes. Do not commit unless explicitly "
-        "authorized. " + result + "Luna supervises lifecycle and "
-        "receipt only.\n"
-        f"{REUSE_BEFORE_DECISION}\n"
+        + _AUTHORIZED_WORK
+        + f"{REUSE_BEFORE_DECISION}\n"
         "Recursive content search MUST use the Harness default helper (not an OS sandbox): "
         f'python "{helper}" --root <repo-or-module> --pattern <pattern> [--path <file-or-dir>]. '
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "

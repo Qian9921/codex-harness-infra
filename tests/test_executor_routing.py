@@ -628,6 +628,8 @@ availability = "configured"
     def test_generated_native_roles_include_reuse_before_decision(self) -> None:
         marker = "Name or similarity is not fitness"
         self.assertIn(marker, REUSE_BEFORE_DECISION)
+        self.assertIn("claim-appropriate evidence", REUSE_BEFORE_DECISION)
+        self.assertIn("do not prescribe a new component", REUSE_BEFORE_DECISION)
         native_only = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
         preferred = parse_policy(__import__("tomllib").loads(PAID_BOTH))
         strict_native = parse_policy(

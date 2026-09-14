@@ -1,4 +1,4 @@
-"""Local record loading. json is already a dependency of this module."""
+"""Local record loading."""
 
 import json
 from pathlib import Path
