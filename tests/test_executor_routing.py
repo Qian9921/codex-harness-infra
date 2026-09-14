@@ -10,11 +10,13 @@ from pathlib import Path
 from scripts.executor_routing import (
     PERMIT_QUOTA,
     RECEIPT_SCHEMA,
+    REUSE_BEFORE_DECISION,
     default_native_spec,
     executor_agent_instructions,
     grok_checks_required,
     is_fallback_only_role,
     parse_policy,
+    render_executor_agent,
     select_executor,
     validate_fallback_receipt,
 )
@@ -622,6 +624,67 @@ availability = "configured"
         )
         self.assertEqual(result.selected_id, "native")
         self.assertEqual(result.backend, "codex")
+
+    def test_generated_native_roles_include_reuse_before_decision(self) -> None:
+        marker = "Name or similarity is not fitness"
+        self.assertIn(marker, REUSE_BEFORE_DECISION)
+        self.assertIn("claim-appropriate evidence", REUSE_BEFORE_DECISION)
+        self.assertIn("do not prescribe a new component", REUSE_BEFORE_DECISION)
+        native_only = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
+        preferred = parse_policy(__import__("tomllib").loads(PAID_BOTH))
+        strict_native = parse_policy(
+            __import__("tomllib").loads(
+                PAID_STRICT.replace(
+                    'id = "native"\nbackend = "codex"\ncapabilities = ["implementation", "tests", "git", "local_write"]\ntools = ["workspace-write"]\ncost_preference = "unknown"',
+                    'id = "native"\nbackend = "codex"\ncapabilities = ["implementation", "tests", "git", "local_write"]\ntools = ["workspace-write"]\ncost_preference = "paid_included"',
+                    1,
+                )
+            )
+        )
+        unknown_native = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+"""
+        fallback = parse_policy(__import__("tomllib").loads(unknown_native))
+        cases = (
+            ("native_only", native_only, default_native_spec(native_only), "native_only route"),
+            ("paid_preferred", preferred, default_native_spec(preferred), "capability-fit"),
+            ("paid_strict", strict_native, default_native_spec(strict_native), "normal selectable"),
+            ("quota_fallback", fallback, default_native_spec(fallback), "QUOTA_EXHAUSTED"),
+        )
+        for _label, policy, spec, distinctive in cases:
+            self.assertIsNotNone(spec)
+            instructions = executor_agent_instructions(policy, spec)
+            rendered = render_executor_agent(policy, "native-slug", "low", spec=spec)
+            self.assertIn(distinctive, instructions)
+            self.assertIn(marker, instructions)
+            self.assertIn(marker, rendered)
+            self.assertIn("developer_instructions", rendered)
 
 
 if __name__ == "__main__":

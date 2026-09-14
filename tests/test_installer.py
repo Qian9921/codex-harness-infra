@@ -1251,6 +1251,125 @@ availability = "configured"
                 install(repo, codex_home, local, root / "state")
             self.assertEqual(sidecar.read_text(encoding="utf-8"), "personal runtime\n")
 
+    def test_installed_native_roles_and_bound_prompt_carry_reuse_clause(self) -> None:
+        marker = "Name or similarity is not fitness"
+        configs = {
+            "native_only": """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "native_only"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""",
+            "paid_preferred": """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+""",
+            "paid_strict_native": """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+""",
+            "quota_fallback": """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+""",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, text in configs.items():
+                local = root / f"{name}.toml"
+                local.write_text(text.lstrip(), encoding="utf-8")
+                codex_home, state_dir = root / name / "codex", root / name / "state"
+                install(ROOT, codex_home, local, state_dir)
+                installed = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+                self.assertIn(marker, installed)
+                template = (ROOT / "package/agents/v23-executor.toml.in").read_text(
+                    encoding="utf-8"
+                )
+                if name == "native_only":
+                    self.assertIn("native_only route is complete", installed)
+                    self.assertNotIn("native_only route is complete", template)
+                grok_bridge = (codex_home / "bin/grok-execution.py").read_text(encoding="utf-8")
+                self.assertIn(marker, grok_bridge)
+                self.assertIn("Perform only the work the TASK actually authorizes", grok_bridge)
+                self.assertIn("claim-appropriate evidence", grok_bridge)
+                self.assertNotIn("_write_work_authorized", grok_bridge)
+                portable = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
+                self.assertIn(marker, portable)
+
 
 if __name__ == "__main__":
     unittest.main()

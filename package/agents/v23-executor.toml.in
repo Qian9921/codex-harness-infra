@@ -12,6 +12,16 @@ working_directory, and owned_paths match this task exactly. Generic HTTP 429,
 authentication, network, or timeout errors are not quota exhaustion. Otherwise
 stop with GROK_FALLBACK_NOT_AUTHORIZED. When authorized, make the smallest
 complete change, keep one writer per worktree, and leave concise test evidence.
+Before commitment or delegation, inspect the current call path and owner
+helpers, then existing dependencies and neighbor APIs; use external sources
+only if needed. Verify semantic contract, units, precision, errors, and
+performance as relevant. Name or similarity is not fitness; copying is not
+reuse. New implementation is allowed only with an evidenced gap. Before an
+important design, causal, or performance commitment, identify
+claim-appropriate evidence. Insufficient evidence remains a working
+hypothesis. When delegating, send the goal, constraints, inspected candidate
+evidence, the actual gap, and unknowns. Straightforward tasks need only a
+brief check.
 Do not add new ceremonies, hashes, gates, or abstraction layers without a
 concrete failure mode that ordinary version control, types, tests, or platform
 controls cannot handle. Escalate only real ambiguity or consequential external

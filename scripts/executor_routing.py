@@ -748,6 +748,29 @@ def validate_fallback_receipt(
     )
 
 
+REUSE_BEFORE_DECISION = (
+    "Before commitment or delegation, inspect the current call path and owner "
+    "helpers, then existing dependencies and neighbor APIs; use external sources "
+    "only if needed. Verify semantic contract, units, precision, errors, and "
+    "performance as relevant. Name or similarity is not fitness; copying is not "
+    "reuse. New implementation is allowed only with an evidenced gap. Before an "
+    "important design, causal, or performance commitment, identify "
+    "claim-appropriate evidence: source that supports static behavior, a "
+    "reproduction or runtime observation for causes, measurement for "
+    "performance, and algorithm-assumption fit. Insufficient evidence remains a "
+    "working hypothesis; take the smallest check that could change the "
+    "decision. User goals, budgets, and preferences are constraints, not "
+    "factual proof. When delegating, send the goal, constraints, inspected "
+    "candidate evidence, the actual gap, and unknowns; do not prescribe a new "
+    "component while the choice is unsettled. Straightforward tasks need only a "
+    "brief check."
+)
+
+
+def reuse_before_decision_instructions() -> str:
+    return REUSE_BEFORE_DECISION
+
+
 def executor_agent_description(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
     if spec is not None and is_fallback_only_role(policy, spec):
         return "V23 quota-exhaustion-only native execution fallback."
@@ -757,6 +780,7 @@ def executor_agent_description(policy: RoutingPolicy, spec: ExecutorSpec | None 
 
 
 def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None = None) -> str:
+    reuse = reuse_before_decision_instructions()
     if spec is not None and is_fallback_only_role(policy, spec):
         return (
             "You are the native fallback executor for one scoped change. Act only when the\n"
@@ -766,6 +790,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "authentication, network, or timeout errors are not quota exhaustion. Otherwise\n"
             "stop with GROK_FALLBACK_NOT_AUTHORIZED. When authorized, make the smallest\n"
             "complete change, keep one writer per worktree, and leave concise test evidence.\n"
+            f"{reuse} "
             "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
             "concrete failure mode that ordinary version control, types, tests, or platform\n"
             "controls cannot handle. Escalate only real ambiguity or consequential external\n"
@@ -781,7 +806,9 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "That initial selection is not a quota fallback. After a Grok attempt, switch to\n"
             "this agent only with a bound QUOTA_EXHAUSTED receipt; network, auth, timeout,\n"
             "and bridge errors are not quota. Make the smallest complete change, keep one\n"
-            "writer per worktree, and leave concise test evidence. Primary remains\n"
+            "writer per worktree, and leave concise test evidence. "
+            f"{reuse} "
+            "Primary remains\n"
             "decision-only; do not assign implementation back to primary."
         )
     if policy.selection == SELECTION_NATIVE_ONLY:
@@ -789,21 +816,25 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
             "You are the native implementation executor for one scoped change. This\n"
             "native_only route is complete: Grok is not required and no quota receipt is\n"
             "needed. Make the smallest complete change, keep one writer per worktree, and\n"
-            "leave concise test evidence. Do not add new ceremonies, hashes, gates, or\n"
-            "abstraction layers without a concrete failure mode that ordinary version\n"
-            "control, types, tests, or platform controls cannot handle. Escalate only real\n"
-            "ambiguity or consequential external action. Primary remains decision-only; do\n"
-            "not assign implementation back to primary."
+            "leave concise test evidence. "
+            f"{reuse} "
+            "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
+            "concrete failure mode that ordinary version control, types, tests, or platform\n"
+            "controls cannot handle. Escalate only real ambiguity or consequential external\n"
+            "action. Primary remains decision-only; do not assign implementation back to\n"
+            "primary."
         )
     return (
         "You are a native Codex implementation executor selected under the configured\n"
         "routing mode. This candidate is a normal selectable executor, not a Grok quota\n"
         "fallback, and no quota receipt is required. Make the smallest complete change,\n"
-        "keep one writer per worktree, and leave concise test evidence. Do not add new\n"
-        "ceremonies, hashes, gates, or abstraction layers without a concrete failure\n"
-        "mode that ordinary version control, types, tests, or platform controls cannot\n"
-        "handle. Escalate only real ambiguity or consequential external action. Primary\n"
-        "remains decision-only; do not assign implementation back to primary."
+        "keep one writer per worktree, and leave concise test evidence. "
+        f"{reuse} "
+        "Do not add new ceremonies, hashes, gates, or abstraction layers without a\n"
+        "concrete failure mode that ordinary version control, types, tests, or platform\n"
+        "controls cannot handle. Escalate only real ambiguity or consequential external\n"
+        "action. Primary remains decision-only; do not assign implementation back to\n"
+        "primary."
     )
 
 
