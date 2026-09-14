@@ -16,9 +16,9 @@ guidance, not a classifier, hook, or gate.
 | Known file, exact symbol, or exact text | `bin/bounded-search.py` or a direct read | Complete, lightweight baseline. Do not open optional tools first. |
 | Cross-file callers, dependencies, or impact | CodeGraph, when configured and the owner index is usable | Focused query; keep actual symbol or source evidence. |
 | Unknown implementation or similar capability after bounded keywords are insufficient | Semble, when configured | One focused query in a known repo or module; inspect top files. |
-| Compact supported test-output summary when details are unnecessary | RTK `test`, when configured | Optional. Never a prerequisite install. |
+| Compact supported pytest summary when details are unnecessary | `rtk pytest`, when configured | Optional. Never a Harness prerequisite install. |
 | Unified diff, porcelain/JSON, exact diagnostics | Raw project commands | Do not wrap or rewrite the shell. |
-| Experimental text search | tgrep | Never the default backend; never installed by this Harness. |
+| Experimental text search | tgrep | Not a default backend. This Harness does not install it; a user may already have it. |
 
 ## Baseline search
 
@@ -42,33 +42,39 @@ python "${CODEX_HOME:-$HOME/.codex}/bin/bounded-search.py" \
 Use the helper result status (`match`, `no-match`, `error`, `timeout`,
 `incomplete`) as evidence. After timeout or incomplete, narrow and retry.
 
-Ambiguous CLI flags or distribution variants: inspect `--help` on the binary
-that would be invoked. Do not assume a remembered command shape.
+If a command or flag is unknown or the installed version differs, inspect
+`--help` on that binary and fall back to baseline. Do not assume a remembered
+command shape.
 
 ## CodeGraph
 
 Use only for cross-file structure (callers, callees, impact, symbol location)
-when a configured binary exists. Confirm the owner project path and that
-quoted symbols still exist in current files. Graph output is not a substitute
-for reading the source that matters.
+when a configured binary exists and a usable owner index is available.
+Read-only work may query a fresh usable owner index. Do not treat `status`
+alone as proof the graph matches the tree: open the cited current files.
+Graph output is not a substitute for reading the source that matters.
 
 Verified current CLI (inspect `--help` if a local build differs):
 
 ```text
-codegraph status -p <repo>
+codegraph status <repo>
+codegraph status --json <repo>
 codegraph query -p <repo> --json <symbol>
 codegraph callers -p <repo> --json <symbol>
 codegraph impact -p <repo> --json <symbol>
 ```
 
+`status` takes a positional path (`status [path]`, `status --json [path]`),
+not `-p`. `callers`/`query`/`impact` accept `-p`/`--path`.
+
 For a Git checkout, CodeGraph keeps a V23-marked `.codegraph/` cache exclusion
 in that checkout's Git-local info/exclude; it never changes the repository's
-`.gitignore` or enables a CodeGraph daemon. Create or refresh an index only
-when the executor has authorized write in that checkout and the task needs
-structure that baseline search cannot provide. Read-only work must not init or
-repair an index: trace callers with bounded-search and state that the graph
-was unused. Do not index every task, start a CodeGraph daemon, or edit a
-global registry.
+`.gitignore` or enables a CodeGraph daemon. Refresh a missing or stale index
+only when the executor has authorized write in that checkout and the task
+needs structure that baseline search cannot provide. If the index is missing
+or stale and write refresh is not authorized, trace callers with
+bounded-search and state that limit. Do not index every task, start a
+CodeGraph daemon, or edit a global registry.
 
 In a non-Git directory, CodeGraph performs a version probe because there is no
 repository source graph to initialize.
@@ -95,22 +101,31 @@ CLI/app-server timeout. That probe is explicit, not a per-task tool scan.
 ## RTK
 
 Use only for supported compact test-output summaries when failure details are
-unnecessary. Preserve failures and raw details when they matter.
+unnecessary. Preserve failures, diagnostics, and the process exit status.
+
+Dedicated pytest summary:
 
 ```text
-rtk test -- python -m pytest <path>
+rtk pytest <args>
+```
+
+Other test commands, when a compact wrapper is actually needed:
+
+```text
+rtk test -- <command>
 ```
 
 Use raw `git diff`, `git status --porcelain`, JSON parsers, compilers, and
 test runners for unified diffs, machine-readable status, and exact
-diagnostics. Do not prefix arbitrary shell with RTK. Optional; never install
-it as a Harness prerequisite.
+diagnostics. Do not prefix arbitrary shell with RTK. Optional; this Harness
+does not install it.
 
 ## tgrep
 
-tgrep is experimental. Do not treat it as the default search backend, a
-service, or an installed Harness tool. Mention freshness and resource cost
-only when a user already has it; implement no adapter.
+tgrep is experimental. It is not a default search backend or a Harness
+service. This Harness does not install it; a user may already have it
+independently. Mention freshness and resource cost only when it is actually
+used; implement no adapter.
 
 ## Failure and repair
 

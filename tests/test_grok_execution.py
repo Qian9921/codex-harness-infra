@@ -75,6 +75,8 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertIn("narrow the scope", wrapper)
         self.assertIn("Optional tools are selected only for a concrete need", wrapper)
         self.assertIn("tgrep is experimental", wrapper)
+        self.assertIn("not installed by this Harness", wrapper)
+        self.assertIn("inspect that binary's --help", wrapper)
         self.assertIn("fall back to baseline", wrapper)
         self.assertEqual(task, "do work")
 

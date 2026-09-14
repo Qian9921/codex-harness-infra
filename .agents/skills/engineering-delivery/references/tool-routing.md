@@ -13,9 +13,9 @@ work. This is prompt guidance, not a classifier or gate.
 | Known file, exact symbol, or exact text | `bin/bounded-search.py` or a direct read | Always the baseline. |
 | Cross-file callers, dependencies, or impact | CodeGraph | Configured binary, owner index, current content. |
 | Unknown implementation after insufficient keywords | Semble | Focused known repo/module; inspect top files. |
-| Compact supported test summary | RTK `test` | Details unnecessary; optional, never install. |
+| Compact supported pytest summary | `rtk pytest` | Details unnecessary; optional. Harness does not install it. |
 | Diff, porcelain/JSON, exact diagnostics | Raw commands | Do not wrap the shell. |
-| Experimental text search | tgrep | Never default; never installed here. |
+| Experimental text search | tgrep | Not a default backend. Harness does not install it; a user may have it. |
 
 Require an exact repository, module, or explicit file set. Locate files first.
 Do not scan `/home`, `/tmp`, umbrella worktrees, artifacts, or caches for local
@@ -34,16 +34,18 @@ sandbox). Known individual-file reads may stay direct.
 CodeGraph, when used:
 
 ```text
-codegraph status -p <repo>
+codegraph status <repo>
+codegraph status --json <repo>
 codegraph query -p <repo> --json <symbol>
 codegraph callers -p <repo> --json <symbol>
 codegraph impact -p <repo> --json <symbol>
 ```
 
-Confirm the owner index and that symbols still exist in current source. Refresh
-a missing or stale index only under an authorized write executor. Read-only
-fallback: bounded source tracing, and state the limit. Do not index every
-task, start a daemon, or edit a global registry.
+`status` takes a positional path, not `-p`. Read-only work may use a fresh
+usable owner index and must still open cited current files; do not rely on
+status alone. Refresh a missing or stale index only under an authorized write
+executor. Otherwise trace source with bounded-search and state the limit. Do
+not index every task, start a daemon, or edit a global registry.
 
 Semble, when used after bounded keywords fail:
 
@@ -57,14 +59,16 @@ without repeated init repair.
 RTK, when used for compact pytest summaries:
 
 ```text
-rtk test -- python -m pytest <path>
+rtk pytest <args>
 ```
 
-Preserve failures and raw details when they matter. Use raw commands for
-unified diff and porcelain/JSON.
+Preserve failures, diagnostics, and exit status. Use raw commands for unified
+diff and porcelain/JSON.
 
-tgrep is experimental. Mention freshness/resource cost only if already
-present; implement no adapter. Ambiguous tool flags: inspect `--help`.
+tgrep is experimental, not a default backend, and is not installed by this
+Harness; a user may already have it. Mention freshness/resource cost only if
+used; implement no adapter. Unknown or version-different commands: inspect
+`--help`, then baseline.
 
 The CodeGraph cache is Git-local and ignored through a V23-marked info/exclude
 block; it is not committed and no daemon is started.

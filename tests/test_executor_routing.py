@@ -11,7 +11,6 @@ from scripts.executor_routing import (
     PERMIT_QUOTA,
     RECEIPT_SCHEMA,
     REUSE_BEFORE_DECISION,
-    TOOL_SELECTION_GUIDANCE,
     default_native_spec,
     executor_agent_instructions,
     grok_checks_required,
@@ -678,7 +677,7 @@ target = "native"
             ("paid_strict", strict_native, default_native_spec(strict_native), "normal selectable"),
             ("quota_fallback", fallback, default_native_spec(fallback), "QUOTA_EXHAUSTED"),
         )
-        for _label, policy, spec, distinctive in cases:
+        for label, policy, spec, distinctive in cases:
             self.assertIsNotNone(spec)
             instructions = executor_agent_instructions(policy, spec)
             rendered = render_executor_agent(policy, "native-slug", "low", spec=spec)
@@ -686,32 +685,14 @@ target = "native"
             self.assertIn(marker, instructions)
             self.assertIn(marker, rendered)
             self.assertIn("developer_instructions", rendered)
-
-    def test_generated_native_roles_include_tool_selection_guidance(self) -> None:
-        marker = "Optional tools are selected only for a concrete need"
-        self.assertIn(marker, TOOL_SELECTION_GUIDANCE)
-        self.assertIn("tgrep is experimental", TOOL_SELECTION_GUIDANCE)
-        native_only = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
-        preferred = parse_policy(__import__("tomllib").loads(PAID_BOTH))
-        fallback = parse_policy(__import__("tomllib").loads(PAID_BOTH))
-        cases = (
-            native_only,
-            preferred,
-            fallback,
-        )
-        specs = (
-            default_native_spec(native_only),
-            default_native_spec(preferred),
-            default_native_spec(fallback),
-        )
-        for policy, spec in zip(cases, specs, strict=True):
-            instructions = executor_agent_instructions(policy, spec)
-            rendered = render_executor_agent(policy, "native-slug", "low", spec=spec)
-            self.assertIn(marker, instructions)
-            self.assertIn("focused CodeGraph query", instructions)
-            self.assertIn("never the default backend", instructions)
-            self.assertIn(marker, rendered)
-            self.assertNotIn("NLP classifier", instructions)
+            self.assertIn("Optional tools are selected only for a concrete need", instructions)
+            self.assertIn("not installed by this Harness", instructions)
+            self.assertIn("inspect that binary's --help", instructions)
+            self.assertIn("fresh usable index", instructions)
+            if label == "quota_fallback":
+                self.assertTrue(is_fallback_only_role(policy, spec))
+            else:
+                self.assertFalse(is_fallback_only_role(policy, spec))
 
 
 if __name__ == "__main__":
