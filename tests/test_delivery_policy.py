@@ -297,6 +297,11 @@ repositories = []
             context = completed.stdout
             self.assertIn("daemon_probes=skipped", context)
             self.assertNotIn("cli_version=", context)
+            executor = (home / "agents/v23-executor.toml").read_text(encoding="utf-8")
+            self.assertIn("missing or failed tools fall back to baseline", executor)
+            self.assertNotIn("[tools]", local.read_text(encoding="utf-8"))
+            self.assertNotIn("codegraph =", local.read_text(encoding="utf-8"))
+            self.assertNotIn("probe_tools", context)
             ephemeral = Path(directory) / "request delivery.toml"
             policy_cli = subprocess.run(
                 [

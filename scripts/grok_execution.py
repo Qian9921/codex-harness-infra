@@ -194,6 +194,22 @@ REUSE_BEFORE_DECISION = (
     "brief check."
 )
 
+TOOL_SELECTION_GUIDANCE = (
+    "Known file, exact symbol, or exact text: bounded-search or a direct read. "
+    "Cross-file callers, dependencies, or impact: a focused CodeGraph query when "
+    "available, using the owner index, current content, and actual symbol or "
+    "source evidence; refresh a missing or stale index only under an authorized "
+    "write executor, otherwise trace source with bounded-search and state the "
+    "limit. Unknown implementation after insufficient bounded keywords: focused "
+    "Semble in a known repo or module, then inspect top files; query echo is not "
+    "an answer. Compact supported test summaries only: optional RTK; use raw "
+    "commands for unified diffs, porcelain/JSON, and exact diagnostics. tgrep is "
+    "experimental, never the default backend, and is not installed. Optional "
+    "tools are selected only for a concrete need, actually invoked when they "
+    "fit, and missing or failed tools fall back to baseline. This is prompt "
+    "guidance, not a classifier or gate."
+)
+
 _AUTHORIZED_WORK = (
     "Perform only the work the TASK actually authorizes, only in that directory. "
     "Read-only tasks investigate, report, and run relevant nonmutating checks. "
@@ -227,7 +243,8 @@ def _bound_prompt(
         f'python "{helper}" --root <repo-or-module> --pattern <pattern> [--path <file-or-dir>]. '
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "
         "scope and retry; never treat incomplete as no-match. Known individual-file reads "
-        "may stay direct. Do not bypass with grep or Python recursive scans.\n\n"
+        "may stay direct. Do not bypass with grep or Python recursive scans.\n"
+        f"{TOOL_SELECTION_GUIDANCE}\n\n"
         "TASK\n"
         f"{prompt}"
     )

@@ -11,6 +11,7 @@ from scripts.executor_routing import (
     PERMIT_QUOTA,
     RECEIPT_SCHEMA,
     REUSE_BEFORE_DECISION,
+    TOOL_SELECTION_GUIDANCE,
     default_native_spec,
     executor_agent_instructions,
     grok_checks_required,
@@ -685,6 +686,32 @@ target = "native"
             self.assertIn(marker, instructions)
             self.assertIn(marker, rendered)
             self.assertIn("developer_instructions", rendered)
+
+    def test_generated_native_roles_include_tool_selection_guidance(self) -> None:
+        marker = "Optional tools are selected only for a concrete need"
+        self.assertIn(marker, TOOL_SELECTION_GUIDANCE)
+        self.assertIn("tgrep is experimental", TOOL_SELECTION_GUIDANCE)
+        native_only = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
+        preferred = parse_policy(__import__("tomllib").loads(PAID_BOTH))
+        fallback = parse_policy(__import__("tomllib").loads(PAID_BOTH))
+        cases = (
+            native_only,
+            preferred,
+            fallback,
+        )
+        specs = (
+            default_native_spec(native_only),
+            default_native_spec(preferred),
+            default_native_spec(fallback),
+        )
+        for policy, spec in zip(cases, specs, strict=True):
+            instructions = executor_agent_instructions(policy, spec)
+            rendered = render_executor_agent(policy, "native-slug", "low", spec=spec)
+            self.assertIn(marker, instructions)
+            self.assertIn("focused CodeGraph query", instructions)
+            self.assertIn("never the default backend", instructions)
+            self.assertIn(marker, rendered)
+            self.assertNotIn("NLP classifier", instructions)
 
 
 if __name__ == "__main__":

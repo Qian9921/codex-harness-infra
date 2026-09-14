@@ -1,0 +1,1 @@
+fixture-token: DIRECT-READ-ALPHA-9
