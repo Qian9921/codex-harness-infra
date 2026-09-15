@@ -88,6 +88,40 @@ executor = "luna-low"
 reviewer = "reviewer-model"
 """
 
+PI_FALLBACK = """
+[models]
+primary = "primary-model"
+executor = "native-slug-future"
+reviewer = "reviewer-model"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "pi_flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "deepseek-v4.1-flash"
+effort = "max"
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+"""
+
 
 class ExecutorRoutingTests(unittest.TestCase):
     def test_native_only_does_not_require_grok(self) -> None:
@@ -207,6 +241,52 @@ class ExecutorRoutingTests(unittest.TestCase):
         )
         self.assertEqual(bad.status, "blocked")
         self.assertIn("task_id", bad.blocked or "")
+
+    def test_pi_quota_receipt_requires_provider_and_thinking(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(PI_FALLBACK))
+        owned = ["/tmp/work/owned"]
+        matching = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "pi_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "deepseek-v4.1-flash",
+            "provider": "qwen-token-plan-cn",
+            "thinking": "max",
+        }
+        ok = validate_fallback_receipt(
+            policy,
+            matching,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(ok.status, "fallback")
+        self.assertTrue(ok.fallback_authorized)
+        cases = (
+            ({**matching, "provider": None}, "provider"),
+            ({k: v for k, v in matching.items() if k != "provider"}, "provider"),
+            ({**matching, "provider": "xai"}, "provider"),
+            ({k: v for k, v in matching.items() if k != "thinking"}, "thinking"),
+            ({**matching, "thinking": "xhigh"}, "thinking"),
+        )
+        for receipt, field in cases:
+            blocked = validate_fallback_receipt(
+                policy,
+                receipt,
+                task_id="task-1",
+                working_directory="/tmp/work",
+                owned_paths=owned,
+                capabilities=("implementation",),
+                tools=("workspace-write",),
+            )
+            self.assertEqual(blocked.status, "blocked", field)
+            self.assertFalse(blocked.fallback_authorized)
+            self.assertIn(field, blocked.blocked or "")
 
     def test_cause_string_does_not_authorize_quota_fallback(self) -> None:
         policy = parse_policy(__import__("tomllib").loads(LEGACY))

@@ -820,8 +820,17 @@ def validate_fallback_receipt(
     if actual is not None and actual != source.actual_model:
         mismatched.append("actual_model")
     provider = receipt.get("provider")
-    if provider is not None and provider != source.provider:
-        mismatched.append("provider")
+    thinking = receipt.get("thinking")
+    if source.backend == BACKEND_PI:
+        if provider != source.provider:
+            mismatched.append("provider")
+        if thinking != source.effort:
+            mismatched.append("thinking")
+    else:
+        if provider is not None and provider != source.provider:
+            mismatched.append("provider")
+        if thinking is not None and thinking != source.effort:
+            mismatched.append("thinking")
     if mismatched:
         return _blocked(
             policy,

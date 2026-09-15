@@ -910,6 +910,47 @@ class GrokExecutionTests(unittest.TestCase):
             )
             self.assertTrue(receipt["continued"])
 
+    def test_resume_wrong_thinking_is_rejected_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            owned = [str(cwd / "owned.txt")]
+            session_dir = str(cwd / "pi-sessions")
+            receipt_path = cwd / "receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema": grok_execution.SCHEMA,
+                        "status": "SUCCESS",
+                        "conversation_id": "sess-1",
+                        "working_directory": str(cwd),
+                        "task_id": "quota-test",
+                        "owned_paths": owned,
+                        "provider": "xai",
+                        "requested_model": "grok-4.6",
+                        "actual_model": "grok-4.6",
+                        "thinking": "low",
+                        "session_dir": session_dir,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(
+                    grok_execution.BridgeError,
+                    r"resume receipt binding mismatch: thinking",
+                ),
+            ):
+                grok_execution._run(
+                    _run_args(
+                        directory,
+                        session="sess-1",
+                        receipt=str(receipt_path),
+                        session_dir=session_dir,
+                    )
+                )
+            supervised.assert_not_called()
+
     def test_prompt_file_is_deleted_after_subprocess_failure(self) -> None:
         observed: dict[str, pathlib.Path] = {}
 
