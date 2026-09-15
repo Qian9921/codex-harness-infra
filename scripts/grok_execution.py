@@ -21,9 +21,6 @@ from typing import Any
 GROK_PROVIDER = "xai"
 GROK_MODEL = "grok-4.6"
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
-UNSUPPORTED_THINKING = {
-    (GROK_PROVIDER, GROK_MODEL): frozenset({"off", "minimal", "max"}),
-}
 SUCCESS_STOP_REASONS = frozenset({"stop"})
 FAILED_STOP_REASONS = frozenset({"error", "aborted", "length", "pending"})
 PI_TOOLS = "read,bash,edit,write"
@@ -92,9 +89,6 @@ def _validate_identity(provider: str, model: str, thinking: str) -> None:
         raise BridgeError("provider, model, and thinking are required")
     if thinking not in THINKING_LEVELS:
         raise BridgeError(f"unknown thinking level {thinking!r}")
-    blocked = UNSUPPORTED_THINKING.get((provider, model), frozenset())
-    if thinking in blocked:
-        raise BridgeError(f"thinking {thinking!r} is not valid for {provider}/{model}")
 
 
 def _directory(value: str) -> pathlib.Path:
@@ -430,6 +424,7 @@ def _quota_receipt(
     owned_paths: Sequence[str],
     provider: str,
     requested_model: str,
+    thinking: str,
     actual_model: str | None = None,
     fallback_reason: str,
 ) -> dict[str, Any]:
@@ -441,6 +436,7 @@ def _quota_receipt(
         "owned_paths": list(owned_paths),
         "provider": provider,
         "requested_model": requested_model,
+        "thinking": thinking,
         "fallback_reason": fallback_reason,
     }
     if actual_model:
@@ -978,6 +974,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 owned_paths=owned_paths,
                 provider=provider,
                 requested_model=model,
+                thinking=thinking,
                 fallback_reason=_fallback_reason(provider, model),
             ),
         )

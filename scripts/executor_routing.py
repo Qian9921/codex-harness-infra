@@ -51,10 +51,6 @@ GROK_ACTUAL_MODEL = "grok-4.6"
 GROK_LEGACY_ACTUAL_MODEL = "grok-4.6-build"
 GROK_EFFORT = "xhigh"
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
-# Built-in Pi catalog holes. This is provider metadata, not a user preference.
-UNSUPPORTED_THINKING = {
-    (GROK_PROVIDER, GROK_REQUESTED_MODEL): frozenset({"off", "minimal", "max"}),
-}
 FALLBACK_REASON_GROK = "grok_quota_exhausted"
 FALLBACK_REASON_PI = "pi_quota_exhausted"
 LEGACY_GROK_ID = "grok_build"
@@ -86,9 +82,6 @@ def validate_thinking(
 ) -> None:
     if effort not in THINKING_LEVELS:
         raise RoutingError(f"unknown thinking level {effort!r}")
-    blocked = UNSUPPORTED_THINKING.get((provider, model), frozenset())
-    if effort in blocked:
-        raise RoutingError(f"thinking {effort!r} is not valid for {provider}/{model}")
     if allowed and effort not in allowed:
         raise RoutingError(
             f"thinking {effort!r} is not in executor thinking_levels for {provider}/{model}"
@@ -522,7 +515,7 @@ def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
                 "--task-id <id> --owned-path <path> --prompt-file <file> "
                 f"--provider {spec.provider} --model {spec.actual_model} "
                 f"--thinking {spec.effort} --session-dir <dir>. "
-                "Validate actual provider/model/stopReason from JSONL; do not fall back to grok."
+                "Validate Pi-reported provider/model/stopReason from JSONL; do not fall back to grok."
             ),
         }
     agent = executor_agent_name(spec, policy)

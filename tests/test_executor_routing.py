@@ -378,13 +378,23 @@ availability = "configured"
         with self.assertRaisesRegex(Exception, "requested_model must equal actual_model"):
             parse_policy(__import__("tomllib").loads(text))
 
-    def test_grok_backend_rejects_max_thinking(self) -> None:
+    def test_thinking_levels_can_restrict_effort(self) -> None:
         text = PAID_BOTH.replace(
             'backend = "grok"',
-            'backend = "grok"\neffort = "max"',
+            'backend = "grok"\neffort = "max"\nthinking_levels = ["xhigh"]',
         )
-        with self.assertRaisesRegex(Exception, "not valid"):
+        with self.assertRaisesRegex(Exception, "thinking_levels"):
             parse_policy(__import__("tomllib").loads(text))
+        allowed = parse_policy(
+            __import__("tomllib").loads(
+                PAID_BOTH.replace(
+                    'backend = "grok"',
+                    'backend = "grok"\neffort = "max"',
+                )
+            )
+        )
+        grok = next(item for item in allowed.executors if item.backend == "grok")
+        self.assertEqual(grok.effort, "max")
 
     def test_pi_backend_accepts_deepseek_max(self) -> None:
         text = """

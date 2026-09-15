@@ -665,16 +665,29 @@ class GrokExecutionTests(unittest.TestCase):
                         session_dir,
                     ]
                 )
+            grok_max = grok_execution._batch_task(
+                {
+                    "id": "max",
+                    "cwd": ".",
+                    "prompt": "task",
+                    "owned_paths": ["file.txt"],
+                    "provider": "xai",
+                    "model": "grok-4.6",
+                    "thinking": "max",
+                    "session_dir": session_dir,
+                }
+            )
+            self.assertEqual(grok_max.effort, "max")
             with self.assertRaises(grok_execution.BridgeError):
                 grok_execution._batch_task(
                     {
-                        "id": "max",
+                        "id": "bad",
                         "cwd": ".",
                         "prompt": "task",
                         "owned_paths": ["file.txt"],
                         "provider": "xai",
                         "model": "grok-4.6",
-                        "thinking": "max",
+                        "thinking": "ultra",
                         "session_dir": session_dir,
                     }
                 )
@@ -741,6 +754,7 @@ class GrokExecutionTests(unittest.TestCase):
                 owned_paths=owned,
                 provider="xai",
                 requested_model="grok-4.6",
+                thinking="xhigh",
                 fallback_reason="grok_quota_exhausted",
             )
             output = io.StringIO()
@@ -924,6 +938,7 @@ class GrokExecutionTests(unittest.TestCase):
                 owned_paths=owned,
                 provider="xai",
                 requested_model="grok-4.6",
+                thinking="xhigh",
                 fallback_reason="grok_quota_exhausted",
             )
             task = grok_execution._batch_task(
@@ -1131,13 +1146,13 @@ class GrokExecutionTests(unittest.TestCase):
             self.assertEqual(resolved, session_dir)
             self.assertEqual(stat_mode(session_dir), 0o755)
 
-    def test_grok_max_is_rejected_before_spawn(self) -> None:
+    def test_unknown_thinking_is_rejected_before_spawn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with (
                 mock.patch.object(grok_execution, "_supervised_run") as supervised,
-                self.assertRaisesRegex(grok_execution.BridgeError, "not valid"),
+                self.assertRaisesRegex(grok_execution.BridgeError, "unknown thinking"),
             ):
-                grok_execution._run(_run_args(directory, effort="max"))
+                grok_execution._run(_run_args(directory, effort="ultra"))
             supervised.assert_not_called()
 
     def test_supervised_run_fails_closed_without_validated_pgid(self) -> None:

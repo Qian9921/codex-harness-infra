@@ -38,30 +38,30 @@ tools = ["workspace-write"]
 cost_preference = "unknown"
 availability = "configured"
 
-# Optional paid external executor (uncomment and set selection to paid_preferred
-# or paid_strict). Identity is local configuration, not a shared default.
-# backend grok is the Pi adapter locked to xai/grok-4.6; thinking must be valid
-# for that model (xhigh is valid, max is not). backend pi is generic.
+# Optional paid Pi executors (uncomment and set selection to paid_preferred or
+# paid_strict). Identity is local configuration, not a shared default. Use
+# backend = "pi" with provider, requested_model = actual_model, and effort.
+# Do not treat CLI labels as Pi-reported identity; the adapter validates JSONL.
 # User cost_preference is a declaration, not a live balance.
 # [[routing.executors]]
-# id = "grok_build"
-# backend = "grok"
-# provider = "xai"
-# requested_model = "grok-4.6"
-# actual_model = "grok-4.6"
-# effort = "xhigh"
+# id = "pi_one"
+# backend = "pi"
+# provider = ""
+# requested_model = ""
+# actual_model = ""
+# effort = ""
 # capabilities = ["implementation", "tests", "git", "local_write"]
 # tools = ["workspace-write"]
 # cost_preference = "paid_included"
 # availability = "configured"
 #
 # [[routing.executors]]
-# id = "deepseek_flash"
+# id = "pi_two"
 # backend = "pi"
-# provider = "qwen-token-plan-cn"
-# requested_model = "deepseek-v4.1-flash"
-# actual_model = "deepseek-v4.1-flash"
-# effort = "max"
+# provider = ""
+# requested_model = ""
+# actual_model = ""
+# effort = ""
 # capabilities = ["implementation", "tests", "git", "local_write"]
 # tools = ["workspace-write"]
 # cost_preference = "paid_included"
