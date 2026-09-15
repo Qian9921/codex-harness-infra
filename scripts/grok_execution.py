@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -26,6 +27,7 @@ UNSUPPORTED_THINKING = {
 SUCCESS_STOP_REASONS = frozenset({"stop"})
 FAILED_STOP_REASONS = frozenset({"error", "aborted", "length", "pending"})
 PI_TOOLS = "read,bash,edit,write"
+TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
 DEFAULT_TIMEOUT_SECONDS = None
@@ -105,7 +107,13 @@ def _directory(value: str) -> pathlib.Path:
 def _required_task_id(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BridgeError("task-id is required and must be nonempty")
-    return value
+    task_id = value.strip()
+    if not TASK_ID_RE.fullmatch(task_id):
+        raise BridgeError(
+            "task-id must be a portable filename token "
+            "[A-Za-z][A-Za-z0-9_-]{0,62} without path separators"
+        )
+    return task_id
 
 
 def _prompt(args: argparse.Namespace) -> str:
@@ -128,6 +136,7 @@ def _resume_binding(
     *,
     provider: str,
     model: str,
+    thinking: str,
     session_dir: pathlib.Path,
 ) -> None:
     if args.session is None:
@@ -146,6 +155,7 @@ def _resume_binding(
         "provider": provider,
         "requested_model": model,
         "actual_model": model,
+        "thinking": thinking,
         "session_dir": str(session_dir),
     }
     mismatched = [key for key, value in expected.items() if receipt.get(key) != value]
@@ -274,6 +284,29 @@ def _completed_result(
         "response": _assistant_text(last),
         "assistant_calls": len(assistants),
     }
+
+
+def _jsonl_error_detail(events: Sequence[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        if isinstance(event.get("errorMessage"), str) and event["errorMessage"].strip():
+            parts.append(event["errorMessage"])
+        error = event.get("error")
+        if isinstance(error, str) and error.strip():
+            parts.append(error)
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        err = message.get("errorMessage")
+        if isinstance(err, str) and err.strip():
+            parts.append(err)
+        if message.get("role") == "assistant" and message.get("stopReason") == "error":
+            text = _assistant_text(message)
+            if text.strip():
+                parts.append(text)
+    return "\n".join(parts)
 
 
 def _owned_paths(cwd: pathlib.Path, values: Sequence[str]) -> list[str]:
@@ -421,12 +454,16 @@ def _session_dir(value: Any) -> pathlib.Path:
     path = pathlib.Path(value).expanduser()
     if not path.is_absolute():
         raise BridgeError("session-dir must be an absolute path")
+    existed = path.exists()
+    if existed and (path.is_symlink() or not path.is_dir()):
+        raise BridgeError(f"session-dir is not a directory: {value}")
     path.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(path, 0o700)
-    except OSError:
-        pass
-    if not path.is_dir():
+    if not existed:
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+    if not path.is_dir() or path.is_symlink():
         raise BridgeError(f"session-dir is not a directory: {value}")
     return path.resolve()
 
@@ -888,6 +925,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         task_id,
         provider=provider,
         model=model,
+        thinking=thinking,
         session_dir=session_dir,
     )
     bound = _bound_prompt(
@@ -920,24 +958,35 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             prompt_path.unlink(missing_ok=True)
     wall_seconds = time.monotonic() - started
     stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
     events_path = _persist_events(session_dir, task_id, stdout)
+    events: list[dict[str, Any]] | None = None
+    jsonl_detail = ""
+    if stdout.strip():
+        try:
+            events = _parse_jsonl(stdout)
+            jsonl_detail = _jsonl_error_detail(events)
+        except BridgeError:
+            events = None
+    detail = "\n".join(part for part in ((stderr or stdout).strip(), jsonl_detail) if part)
+    if _is_quota_exhaustion(detail):
+        raise QuotaExhausted(
+            "account quota is exhausted",
+            _quota_receipt(
+                cwd=cwd,
+                task_id=task_id,
+                owned_paths=owned_paths,
+                provider=provider,
+                requested_model=model,
+                fallback_reason=_fallback_reason(provider, model),
+            ),
+        )
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        if _is_quota_exhaustion(detail):
-            raise QuotaExhausted(
-                "account quota is exhausted",
-                _quota_receipt(
-                    cwd=cwd,
-                    task_id=task_id,
-                    owned_paths=owned_paths,
-                    provider=provider,
-                    requested_model=model,
-                    fallback_reason=_fallback_reason(provider, model),
-                ),
-            )
         raise BridgeError(f"pi failed with exit code {completed.returncode}: {detail}")
+    if events is None:
+        raise BridgeError("pi did not return a JSONL event stream")
     parsed = _completed_result(
-        _parse_jsonl(stdout),
+        events,
         provider=provider,
         model=model,
         session_id_expected=args.session,

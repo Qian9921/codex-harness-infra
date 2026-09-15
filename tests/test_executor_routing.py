@@ -338,6 +338,46 @@ class ExecutorRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "unsupported Grok identity"):
             parse_policy(__import__("tomllib").loads(text))
 
+    def test_legacy_grok_build_alias_is_normalized(self) -> None:
+        text = PAID_BOTH.replace(
+            'backend = "grok"',
+            'backend = "grok"\nactual_model = "grok-4.6-build"',
+        )
+        policy = parse_policy(__import__("tomllib").loads(text))
+        grok = next(item for item in policy.executors if item.backend == "grok")
+        self.assertEqual(grok.actual_model, "grok-4.6")
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.actual_model, "grok-4.6")
+        self.assertEqual(result.invocation["model"], "grok-4.6")
+        self.assertIn("--model grok-4.6", result.invocation["how"])
+
+    def test_pi_requested_model_must_equal_actual_model(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "other-flash"
+effort = "max"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        with self.assertRaisesRegex(Exception, "requested_model must equal actual_model"):
+            parse_policy(__import__("tomllib").loads(text))
+
     def test_grok_backend_rejects_max_thinking(self) -> None:
         text = PAID_BOTH.replace(
             'backend = "grok"',

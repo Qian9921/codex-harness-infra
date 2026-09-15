@@ -32,6 +32,7 @@ def _pi_jsonl(
     text: str = "ok",
     thinking: str | None = None,
     usage: dict[str, int] | None = None,
+    error_message: str | None = None,
 ) -> str:
     token_usage = usage or {
         "input": 1,
@@ -61,6 +62,7 @@ def _pi_jsonl(
                     "provider": provider,
                     "model": model,
                     "stopReason": stop,
+                    "errorMessage": error_message,
                     "usage": token_usage,
                     "timestamp": 2,
                 },
@@ -707,6 +709,11 @@ class GrokExecutionTests(unittest.TestCase):
                 grok_execution._run(_run_args(directory, task_id=""))
             with self.assertRaisesRegex(grok_execution.BridgeError, "owned-path"):
                 grok_execution._run(_run_args(directory, owned_path=[]))
+            with mock.patch.object(grok_execution, "_supervised_run") as supervised:
+                for bad_id in ("../escape", "/tmp/abs"):
+                    with self.assertRaisesRegex(grok_execution.BridgeError, "portable filename"):
+                        grok_execution._run(_run_args(directory, task_id=bad_id))
+            supervised.assert_not_called()
 
     def test_only_explicit_usage_exhaustion_authorizes_fallback(self) -> None:
         for detail in (
@@ -861,6 +868,7 @@ class GrokExecutionTests(unittest.TestCase):
                         "provider": "xai",
                         "requested_model": "grok-4.6",
                         "actual_model": "grok-4.6",
+                        "thinking": "xhigh",
                         "session_dir": session_dir,
                     }
                 ),
@@ -1078,6 +1086,50 @@ class GrokExecutionTests(unittest.TestCase):
             self.assertEqual(receipt["provider"], "qwen-token-plan-cn")
             self.assertEqual(receipt["actual_model"], "deepseek-v4.1-flash")
             self.assertEqual(receipt["thinking"], "max")
+
+    def test_exit_zero_quota_error_message_authorizes_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(
+                stop="error",
+                error_message="insufficient_quota: weekly limit reached",
+            )
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                ),
+                self.assertRaises(grok_execution.QuotaExhausted) as raised,
+            ):
+                grok_execution._run(_run_args(directory))
+            self.assertEqual(raised.exception.receipt["fallback_reason"], "grok_quota_exhausted")
+            self.assertEqual(raised.exception.receipt["requested_model"], "grok-4.6")
+
+    def test_exit_zero_nonquota_error_does_not_authorize_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(stop="error", error_message="authentication failed")
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                ),
+                self.assertRaises(grok_execution.BridgeError) as raised,
+            ):
+                grok_execution._run(_run_args(directory))
+            self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+            self.assertIn("non-success stop reason", str(raised.exception))
+
+    def test_existing_session_dir_mode_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = pathlib.Path(directory).resolve() / "shared-sessions"
+            session_dir.mkdir()
+            os.chmod(session_dir, 0o755)
+            resolved = grok_execution._session_dir(str(session_dir))
+            self.assertEqual(resolved, session_dir)
+            self.assertEqual(stat_mode(session_dir), 0o755)
 
     def test_grok_max_is_rejected_before_spawn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1190,6 +1190,68 @@ instruction = "Local-only opening."
             self.assertEqual(payload["invocation"]["kind"], "pi_bridge")
             self.assertEqual(payload["invocation"]["thinking"], "xhigh")
 
+    def test_installed_cli_normalizes_legacy_grok_build_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "native-slug"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "grok_build"
+backend = "grok"
+actual_model = "grok-4.6-build"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(codex_home / "bin/executor-routing.py"),
+                    "select",
+                    "--local-config",
+                    str(local),
+                    "--capability",
+                    "implementation",
+                    "--tool",
+                    "workspace-write",
+                ],
+                cwd=str(root),
+                env=self._clean_python_env(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["backend"], "grok")
+            self.assertEqual(payload["actual_model"], "grok-4.6")
+            self.assertIn("--model grok-4.6", payload["invocation"]["how"])
+
     def test_missing_installed_runtime_is_doctor_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

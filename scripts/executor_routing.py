@@ -48,6 +48,7 @@ GENERIC_FAILURE_CAUSES = frozenset(
 GROK_PROVIDER = "xai"
 GROK_REQUESTED_MODEL = "grok-4.6"
 GROK_ACTUAL_MODEL = "grok-4.6"
+GROK_LEGACY_ACTUAL_MODEL = "grok-4.6-build"
 GROK_EFFORT = "xhigh"
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
 # Built-in Pi catalog holes. This is provider metadata, not a user preference.
@@ -277,6 +278,8 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
         provider = provider or GROK_PROVIDER
         requested = requested.strip() or GROK_REQUESTED_MODEL
         actual = actual.strip() or GROK_ACTUAL_MODEL
+        if actual == GROK_LEGACY_ACTUAL_MODEL:
+            actual = GROK_ACTUAL_MODEL
         effort = effort or GROK_EFFORT
         if (
             provider != GROK_PROVIDER
@@ -296,6 +299,11 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
             raise RoutingError(
                 f"executor {ident!r} backend pi requires provider, requested_model, "
                 "actual_model, and effort"
+            )
+        if requested != actual:
+            raise RoutingError(
+                f"executor {ident!r} requested_model must equal actual_model; "
+                "the Pi adapter has a single --model identity"
             )
         validate_thinking(provider, requested, effort, thinking_levels)
     elif provider or effort or thinking_levels:
@@ -512,7 +520,7 @@ def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
                 "Invoke the installed Pi adapter with Python, never GrokCLI: "
                 'python "${CODEX_HOME}/bin/grok-execution.py" run --cwd <dir> '
                 "--task-id <id> --owned-path <path> --prompt-file <file> "
-                f"--provider {spec.provider} --model {spec.requested_model} "
+                f"--provider {spec.provider} --model {spec.actual_model} "
                 f"--thinking {spec.effort} --session-dir <dir>. "
                 "Validate actual provider/model/stopReason from JSONL; do not fall back to grok."
             ),
@@ -814,6 +822,8 @@ def validate_fallback_receipt(
     }
     mismatched = [key for key, value in required.items() if receipt.get(key) != value]
     actual = receipt.get("actual_model")
+    if actual == GROK_LEGACY_ACTUAL_MODEL:
+        actual = GROK_ACTUAL_MODEL
     if actual is not None and actual != source.actual_model:
         mismatched.append("actual_model")
     provider = receipt.get("provider")
