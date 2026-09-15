@@ -245,7 +245,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("MUST be supervised", workflow)
         self.assertNotIn("MUST be supervised", architecture)
         self.assertIn("supervisor completion event", skill)
-        self.assertIn("does not directly narrate or poll Grok", skill)
+        self.assertIn("does not directly narrate or poll the adapter", skill)
         self.assertNotIn("may supervise", skill)
         self.assertNotIn("may supervise", workflow)
         self.assertNotIn("may supervise", architecture)

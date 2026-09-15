@@ -22,7 +22,7 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 The portable roles are `primary`, `executor`, and `reviewer`:
 
 - `primary` is decision-only: scope, routing, targeted read-only acceptance, and the final report. It never edits files and never performs mechanical execution, including tiny code, docs, or config fixes. If the executor route is unavailable, repair a valid route; do not fall back to primary implementation.
-- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter. Backend identity and receipts load only from the selected backend skill.
+- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter, now dispatched through the generic Pi adapter rather than GrokCLI. Backend identity and receipts load only from the selected backend skill.
 - `reviewer` uses fresh context and reviews the current change read-only.
 
 The local installation maps primary, executor, and reviewer roles to the models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration. Shared policy names logical executor IDs and backends, not current native version strings.
@@ -31,12 +31,12 @@ The local installation maps primary, executor, and reviewer roles to the models 
 
 Copy `package/local.example.toml` and set `[routing].selection`:
 
-- `native_only`: Codex-only. No Grok executable or quota receipt is required.
+- `native_only`: Codex-only. No Pi executable or quota receipt is required.
 - `paid_preferred`: prefer a matching paid/included executor; fallback only if `[routing.fallback]` permits a cause such as `quota_exhausted`.
 - `paid_strict`: same preference; block when the paid/included candidate is unsuitable, except for an explicit permitted fallback cause.
 - omit `[routing]`: legacy Martin-like Grok-preferred, actual-model receipt, quota-only native fallback.
 
-Supported adapters are native Codex and the existing Grok bridge. Cost preference is a user declaration, not a verified live balance. Unknown quota stays unknown. Model updates require changing local mappings only; do not treat a new native slug as an automatic migration.
+Supported adapters are native Codex and the generic Pi adapter (`backend = grok` or `backend = pi`). Cost preference is a user declaration, not a verified live balance. Unknown quota stays unknown. Model updates require changing local mappings only; do not treat a new native slug as an automatic migration. Do not fall back to GrokCLI.
 
 ```text
 python scripts/executor_routing.py select --local-config <local-file> --capability implementation --tool workspace-write
@@ -44,7 +44,7 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 python scripts/executor_routing.py validate-receipt --local-config <local-file> --receipt <file> --task-id <id> --cwd <abs> --owned-path <abs>
 ```
 
-Automatic selection prefers a single suitable paid/included executor. Multiple suitable candidates require `--executor` and `--reason`. Native dispatch is a registered Codex custom agent spawn (`invocation.agent`); reinstall after local model mapping changes. Grok uses the existing bridge only.
+Automatic selection prefers a single suitable paid/included executor. Multiple suitable candidates require `--executor` and `--reason`. Native dispatch is a registered Codex custom agent spawn (`invocation.agent`); reinstall after local model mapping changes. External dispatch is `invocation.kind = pi_bridge` with provider/model/thinking; native_only stays portable without Pi.
 
 ## Delivery
 
@@ -60,7 +60,7 @@ The installer changes only explicitly owned files and marked blocks. It preserve
 
 ## Local activation
 
-Copy `package/local.example.toml` to a local-only path. A Codex-only install needs `[models]` and `[routing].selection = "native_only"`; opening, Grok, GitHub, and optional tools may stay empty. Set `[delivery]` when GitHub publication is wanted. Run `python scripts/install.py install --local-config <local-file>`. Model slugs stay in that local file; shared policy does not pin a current native version. Start `codex --profile v23-primary`. Review and trust the one V23 UserPromptSubmit hook in Codex's hook browser. Doctor reports installed skills and the runtime used at install.
+Copy `package/local.example.toml` to a local-only path. A Codex-only install needs `[models]` and `[routing].selection = "native_only"`; opening, Pi/Grok, GitHub, and optional tools may stay empty. Set `[delivery]` when GitHub publication is wanted. Run `python scripts/install.py install --local-config <local-file>`. Model slugs stay in that local file; shared policy does not pin a current native version. Start `codex --profile v23-primary`. Review and trust the one V23 UserPromptSubmit hook in Codex's hook browser. Doctor reports installed skills and the runtime used at install.
 
 ## Start here
 

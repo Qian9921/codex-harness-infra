@@ -22,10 +22,11 @@ executor_effort = "low"
 reviewer = ""
 
 [routing]
-# native_only: Codex executor is the complete normal path; Grok is not required.
+# native_only: Codex executor is the complete normal path; Pi/Grok is not required.
 # paid_preferred: prefer a configured paid/included executor that matches the task.
 # paid_strict: same preference; fallback only on an explicit permitted cause.
 # Configs that omit [routing] keep legacy Grok-preferred, quota-only native fallback.
+# External dispatch is the generic Pi adapter. Do not invoke GrokCLI.
 selection = "native_only"
 
 [[routing.executors]]
@@ -37,13 +38,30 @@ tools = ["workspace-write"]
 cost_preference = "unknown"
 availability = "configured"
 
-# Optional paid Grok executor (uncomment and set selection to paid_preferred or
-# paid_strict). User cost_preference is a declaration, not a live balance.
+# Optional paid external executor (uncomment and set selection to paid_preferred
+# or paid_strict). Identity is local configuration, not a shared default.
+# backend grok is the Pi adapter locked to xai/grok-4.6; thinking must be valid
+# for that model (xhigh is valid, max is not). backend pi is generic.
+# User cost_preference is a declaration, not a live balance.
 # [[routing.executors]]
 # id = "grok_build"
 # backend = "grok"
+# provider = "xai"
 # requested_model = "grok-4.6"
-# actual_model = "grok-4.6-build"
+# actual_model = "grok-4.6"
+# effort = "xhigh"
+# capabilities = ["implementation", "tests", "git", "local_write"]
+# tools = ["workspace-write"]
+# cost_preference = "paid_included"
+# availability = "configured"
+#
+# [[routing.executors]]
+# id = "deepseek_flash"
+# backend = "pi"
+# provider = "qwen-token-plan-cn"
+# requested_model = "deepseek-v4.1-flash"
+# actual_model = "deepseek-v4.1-flash"
+# effort = "max"
 # capabilities = ["implementation", "tests", "git", "local_write"]
 # tools = ["workspace-write"]
 # cost_preference = "paid_included"

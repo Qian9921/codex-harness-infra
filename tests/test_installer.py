@@ -713,7 +713,7 @@ availability = "configured"
             install(ROOT, codex_home, local, state_dir)
             executor = (codex_home / "agents/v23-executor.toml").read_text(encoding="utf-8")
             self.assertIn("native_only", executor)
-            self.assertIn("Grok is not required", executor)
+            self.assertIn("Grok or Pi is not required", executor)
             self.assertIn("future-native-slug", executor)
             self.assertIn("Personal rule.", agents.read_text(encoding="utf-8"))
             self.assertTrue((codex_home / "bin/executor-routing.py").is_file())
@@ -1186,7 +1186,9 @@ instruction = "Local-only opening."
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["backend"], "grok")
-            self.assertEqual(payload["actual_model"], "grok-4.6-build")
+            self.assertEqual(payload["actual_model"], "grok-4.6")
+            self.assertEqual(payload["invocation"]["kind"], "pi_bridge")
+            self.assertEqual(payload["invocation"]["thinking"], "xhigh")
 
     def test_missing_installed_runtime_is_doctor_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

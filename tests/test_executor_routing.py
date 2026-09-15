@@ -108,7 +108,10 @@ class ExecutorRoutingTests(unittest.TestCase):
             policy, capabilities=("implementation",), tools=("workspace-write",)
         )
         self.assertEqual(result.selected_id, "grok_build")
-        self.assertEqual(result.actual_model, "grok-4.6-build")
+        self.assertEqual(result.actual_model, "grok-4.6")
+        self.assertEqual(result.invocation["kind"], "pi_bridge")
+        self.assertEqual(result.invocation["provider"], "xai")
+        self.assertEqual(result.invocation["thinking"], "xhigh")
         self.assertFalse(result.fallback_authorized)
 
     def test_capability_mismatch_is_actionable(self) -> None:
@@ -181,7 +184,7 @@ class ExecutorRoutingTests(unittest.TestCase):
             "working_directory": "/tmp/work",
             "owned_paths": owned,
             "requested_model": "grok-4.6",
-            "actual_model": "grok-4.6-build",
+            "actual_model": "grok-4.6",
         }
         ok = validate_fallback_receipt(
             policy,
@@ -335,6 +338,57 @@ class ExecutorRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "unsupported Grok identity"):
             parse_policy(__import__("tomllib").loads(text))
 
+    def test_grok_backend_rejects_max_thinking(self) -> None:
+        text = PAID_BOTH.replace(
+            'backend = "grok"',
+            'backend = "grok"\neffort = "max"',
+        )
+        with self.assertRaisesRegex(Exception, "not valid"):
+            parse_policy(__import__("tomllib").loads(text))
+
+    def test_pi_backend_accepts_deepseek_max(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "deepseek_flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "deepseek-v4.1-flash"
+effort = "max"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        policy = parse_policy(__import__("tomllib").loads(text))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.status, "selected")
+        self.assertEqual(result.backend, "pi")
+        self.assertEqual(result.invocation["kind"], "pi_bridge")
+        self.assertEqual(result.invocation["provider"], "qwen-token-plan-cn")
+        self.assertEqual(result.invocation["thinking"], "max")
+        self.assertIn("never GrokCLI", result.invocation["how"])
+
+    def test_native_only_does_not_require_pi(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
+        self.assertFalse(policy.grok_required)
+        self.assertFalse(grok_checks_required(policy))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.backend, "codex")
+        self.assertEqual(result.invocation["kind"], "codex_subagent")
+
     def test_receipt_model_mismatch_blocks(self) -> None:
         policy = parse_policy(__import__("tomllib").loads(LEGACY))
         owned = ["/tmp/work/owned"]
@@ -473,7 +527,7 @@ class ExecutorRoutingTests(unittest.TestCase):
             NATIVE_ONLY + '\n[routing.fallback]\npermit = ["quota_exhausted"]\ntarget = "native"\n'
         )
         no_grok = no_grok.replace('selection = "native_only"', 'selection = "paid_preferred"')
-        with self.assertRaisesRegex(Exception, "Grok source"):
+        with self.assertRaisesRegex(Exception, "Grok or Pi source"):
             parse_policy(__import__("tomllib").loads(no_grok))
 
     def test_paid_strict_codex_paid_is_normal_role(self) -> None:
