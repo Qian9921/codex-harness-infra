@@ -1,4 +1,4 @@
-# Grok process lifecycle
+# Pi adapter process lifecycle
 
 This is the canonical technical reference for dedicated process-group
 ownership, signal coordination, and cleanup in `scripts/grok_execution.py`.
@@ -7,17 +7,19 @@ skill; this file holds the internals so they are not repeated in every prompt.
 
 ## Guarantees
 
-- External Grok 4.6 Build `low` is the default execution route.
-- `run`/`resume` wait without a wall-clock timeout while the dedicated Grok
+- External dispatch is the generic Pi adapter. GrokCLI is not invoked.
+- Provider, model, and thinking come from the selected executor. `xai/grok-4.6`
+  uses `xhigh`; `max` is accepted only where valid for that identity.
+- `run`/`resume` wait without a wall-clock timeout while the dedicated Pi
   process group is alive and not a zombie. An explicit positive timeout is
   optional.
 - Cleanup ownership is taken immediately after spawn.
 - Public registry and signal cleanup require a validated dedicated PGID
   (`getpgid == pid`).
-- All Codex Grok `run`/`resume` invocations are supervised by a separately
+- All Codex Pi `run`/`resume` invocations are supervised by a separately
   spawned generic Luna-low native subagent that watches lifecycle and receipt
   only and never edits. The parent waits for the supervisor completion event
-  and does not narrate or poll Grok.
+  and does not narrate or poll the adapter.
 - `v23_executor` is the quota-exhaustion-only fallback and is not the
   supervisor. Timeout, authentication, network, bridge, model-identity, or
   receipt errors do not authorize fallback.
@@ -50,7 +52,7 @@ A dedicated post-exec Python launcher, started with `Popen`/`start_new_session`
 and no `preexec_fn`, unblocks and resets termination-signal dispositions,
 restores SIGPIPE and SIGXFSZ to SIG_DFL when `getattr` finds them on the
 platform (matching Python `subprocess.restore_signals`), then `execvpe`s the
-real Grok command so the inherited blocked-signal mask is cleared after exec.
+real Pi command so the inherited blocked-signal mask is cleared after exec.
 The launcher interval stays inside the validated dedicated PGID that cleanup
 SIGKILLs.
 

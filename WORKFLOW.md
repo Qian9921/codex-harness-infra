@@ -1,6 +1,6 @@
 # Delivery workflow
 
-This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Selected-backend internals (including Grok identity, supervision, effort, PGID, and quota labels) load only from that backend's skill.
+This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Selected-backend internals (including Pi/Grok identity, supervision, effort, PGID, and quota labels) load only from that backend's skill.
 
 ## Work kind and capability
 

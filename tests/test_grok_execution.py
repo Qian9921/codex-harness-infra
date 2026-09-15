@@ -23,14 +23,68 @@ from scripts import grok_execution
 SECRET_PROMPT = "SECRET-TASK-PROMPT-DO-NOT-LEAK"
 
 
+def _pi_jsonl(
+    *,
+    session: str = "sess-1",
+    provider: str = "xai",
+    model: str = "grok-4.6",
+    stop: str = "stop",
+    text: str = "ok",
+    thinking: str | None = None,
+    usage: dict[str, int] | None = None,
+    error_message: str | None = None,
+) -> str:
+    token_usage = usage or {
+        "input": 1,
+        "output": 2,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 4,
+        "totalTokens": 7,
+    }
+    events: list[dict[str, object]] = [
+        {"type": "session", "version": 3, "id": session, "timestamp": "t", "cwd": "/tmp"},
+    ]
+    if thinking is not None:
+        events.append({"type": "thinking_level_change", "thinkingLevel": thinking})
+    events.extend(
+        [
+            {"type": "agent_start"},
+            {
+                "type": "message_end",
+                "message": {"role": "user", "content": "hi", "timestamp": 1},
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": text}],
+                    "provider": provider,
+                    "model": model,
+                    "stopReason": stop,
+                    "errorMessage": error_message,
+                    "usage": token_usage,
+                    "timestamp": 2,
+                },
+            },
+            {"type": "agent_end", "messages": []},
+        ]
+    )
+    return "\n".join(json.dumps(item) for item in events)
+
+
 def _run_args(directory: str, **overrides: object) -> argparse.Namespace:
+    cwd = pathlib.Path(directory).resolve()
     values = {
         "cwd": directory,
         "owned_path": ["owned.txt"],
         "session": None,
         "prompt": SECRET_PROMPT,
         "prompt_file": None,
-        "effort": "low",
+        "provider": "xai",
+        "model": "grok-4.6",
+        "effort": "xhigh",
+        "session_dir": str(cwd / "pi-sessions"),
         "mode": "accept-edits",
         "task_id": "quota-test",
         "timeout": None,
@@ -38,6 +92,29 @@ def _run_args(directory: str, **overrides: object) -> argparse.Namespace:
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+def _cli(command: str, session_dir: str, extra: list[str] | None = None) -> list[str]:
+    argv = [
+        command,
+        "--prompt",
+        "bounded task",
+        "--task-id",
+        "one",
+        "--owned-path",
+        "file.txt",
+        "--provider",
+        "xai",
+        "--model",
+        "grok-4.6",
+        "--thinking",
+        "xhigh",
+        "--session-dir",
+        session_dir,
+    ]
+    if extra:
+        argv.extend(extra)
+    return argv
 
 
 class GrokExecutionTests(unittest.TestCase):
@@ -109,60 +186,37 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertEqual(len(set(wrappers)), 1)
 
     def test_run_and_resume_default_to_no_timeout(self) -> None:
-        run_args = grok_execution.parse_args(
-            ["run", "--prompt", "bounded task", "--task-id", "one", "--owned-path", "file.txt"]
-        )
-        resume_args = grok_execution.parse_args(
-            [
-                "resume",
-                "--prompt",
-                "bounded task",
-                "--task-id",
-                "one",
-                "--owned-path",
-                "file.txt",
-                "--session",
-                "sess",
-                "--receipt",
-                "r.json",
-            ]
-        )
-        self.assertIsNone(run_args.timeout)
-        self.assertIsNone(resume_args.timeout)
-        self.assertIsNone(grok_execution.DEFAULT_TIMEOUT_SECONDS)
-        batch = grok_execution._batch_task(
-            {"id": "one", "cwd": ".", "prompt": "task", "owned_paths": ["file.txt"]}
-        )
-        self.assertIsNone(batch.timeout)
-        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            grok_execution.parse_args(
-                [
-                    "run",
-                    "--prompt",
-                    "bounded task",
-                    "--task-id",
-                    "one",
-                    "--owned-path",
-                    "file.txt",
-                    "--timeout",
-                    "0",
-                ]
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = str(pathlib.Path(directory).resolve())
+            run_args = grok_execution.parse_args(_cli("run", session_dir))
+            resume_args = grok_execution.parse_args(
+                _cli(
+                    "resume",
+                    session_dir,
+                    ["--session", "sess", "--receipt", "r.json"],
+                )
             )
-        explicit = grok_execution.parse_args(
-            [
-                "run",
-                "--prompt",
-                "bounded task",
-                "--task-id",
-                "one",
-                "--owned-path",
-                "file.txt",
-                "--timeout",
-                "12",
-            ]
-        )
-        self.assertEqual(explicit.timeout, 12)
-        self.assertEqual(grok_execution.POLL_INTERVAL_SECONDS, 1.0)
+            self.assertIsNone(run_args.timeout)
+            self.assertIsNone(resume_args.timeout)
+            self.assertIsNone(grok_execution.DEFAULT_TIMEOUT_SECONDS)
+            batch = grok_execution._batch_task(
+                {
+                    "id": "one",
+                    "cwd": ".",
+                    "prompt": "task",
+                    "owned_paths": ["file.txt"],
+                    "provider": "xai",
+                    "model": "grok-4.6",
+                    "thinking": "xhigh",
+                    "session_dir": session_dir,
+                }
+            )
+            self.assertIsNone(batch.timeout)
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                grok_execution.parse_args(_cli("run", session_dir, ["--timeout", "0"]))
+            explicit = grok_execution.parse_args(_cli("run", session_dir, ["--timeout", "12"]))
+            self.assertEqual(explicit.timeout, 12)
+            self.assertEqual(grok_execution.POLL_INTERVAL_SECONDS, 1.0)
 
     def test_default_is_alive_treats_missing_proc_stat_as_alive(self) -> None:
         class FakeProc:
@@ -573,40 +627,83 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout, "drained")
 
-    def test_low_is_the_default_effort(self) -> None:
-        args = grok_execution.parse_args(
-            ["run", "--prompt", "bounded task", "--task-id", "one", "--owned-path", "file.txt"]
-        )
-        self.assertEqual(args.effort, "low")
-
-        batch = grok_execution._batch_task(
-            {"id": "one", "cwd": ".", "prompt": "task", "owned_paths": ["file.txt"]}
-        )
-        self.assertEqual(batch.effort, "low")
-        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            grok_execution.parse_args(
-                [
-                    "run",
-                    "--prompt",
-                    "bounded task",
-                    "--task-id",
-                    "one",
-                    "--owned-path",
-                    "file.txt",
-                    "--effort",
-                    "medium",
-                ]
-            )
-        with self.assertRaises(grok_execution.BridgeError):
-            grok_execution._batch_task(
+    def test_thinking_is_required_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = str(pathlib.Path(directory).resolve())
+            args = grok_execution.parse_args(_cli("run", session_dir))
+            self.assertEqual(args.effort, "xhigh")
+            self.assertEqual(args.provider, "xai")
+            self.assertEqual(args.model, "grok-4.6")
+            batch = grok_execution._batch_task(
                 {
-                    "id": "high",
+                    "id": "one",
                     "cwd": ".",
                     "prompt": "task",
                     "owned_paths": ["file.txt"],
-                    "effort": "high",
+                    "provider": "xai",
+                    "model": "grok-4.6",
+                    "thinking": "xhigh",
+                    "session_dir": session_dir,
                 }
             )
+            self.assertEqual(batch.effort, "xhigh")
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                grok_execution.parse_args(
+                    [
+                        "run",
+                        "--prompt",
+                        "bounded task",
+                        "--task-id",
+                        "one",
+                        "--owned-path",
+                        "file.txt",
+                        "--provider",
+                        "xai",
+                        "--model",
+                        "grok-4.6",
+                        "--session-dir",
+                        session_dir,
+                    ]
+                )
+            grok_max = grok_execution._batch_task(
+                {
+                    "id": "max",
+                    "cwd": ".",
+                    "prompt": "task",
+                    "owned_paths": ["file.txt"],
+                    "provider": "xai",
+                    "model": "grok-4.6",
+                    "thinking": "max",
+                    "session_dir": session_dir,
+                }
+            )
+            self.assertEqual(grok_max.effort, "max")
+            with self.assertRaises(grok_execution.BridgeError):
+                grok_execution._batch_task(
+                    {
+                        "id": "bad",
+                        "cwd": ".",
+                        "prompt": "task",
+                        "owned_paths": ["file.txt"],
+                        "provider": "xai",
+                        "model": "grok-4.6",
+                        "thinking": "ultra",
+                        "session_dir": session_dir,
+                    }
+                )
+            deepseek = grok_execution._batch_task(
+                {
+                    "id": "flash",
+                    "cwd": ".",
+                    "prompt": "task",
+                    "owned_paths": ["file.txt"],
+                    "provider": "qwen-token-plan-cn",
+                    "model": "deepseek-v4.1-flash",
+                    "thinking": "max",
+                    "session_dir": session_dir,
+                }
+            )
+            self.assertEqual(deepseek.effort, "max")
 
     def test_run_and_resume_require_task_id_and_owned_path(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
@@ -625,6 +722,11 @@ class GrokExecutionTests(unittest.TestCase):
                 grok_execution._run(_run_args(directory, task_id=""))
             with self.assertRaisesRegex(grok_execution.BridgeError, "owned-path"):
                 grok_execution._run(_run_args(directory, owned_path=[]))
+            with mock.patch.object(grok_execution, "_supervised_run") as supervised:
+                for bad_id in ("../escape", "/tmp/abs"):
+                    with self.assertRaisesRegex(grok_execution.BridgeError, "portable filename"):
+                        grok_execution._run(_run_args(directory, task_id=bad_id))
+            supervised.assert_not_called()
 
     def test_only_explicit_usage_exhaustion_authorizes_fallback(self) -> None:
         for detail in (
@@ -647,7 +749,13 @@ class GrokExecutionTests(unittest.TestCase):
             cwd = pathlib.Path(directory).resolve()
             owned = [str(cwd / "owned.txt")]
             receipt = grok_execution._quota_receipt(
-                cwd=cwd, task_id="quota-test", owned_paths=owned
+                cwd=cwd,
+                task_id="quota-test",
+                owned_paths=owned,
+                provider="xai",
+                requested_model="grok-4.6",
+                thinking="xhigh",
+                fallback_reason="grok_quota_exhausted",
             )
             output = io.StringIO()
             with (
@@ -667,6 +775,14 @@ class GrokExecutionTests(unittest.TestCase):
                         "quota-test",
                         "--owned-path",
                         "owned.txt",
+                        "--provider",
+                        "xai",
+                        "--model",
+                        "grok-4.6",
+                        "--thinking",
+                        "xhigh",
+                        "--session-dir",
+                        str(cwd / "pi-sessions"),
                     ]
                 )
             printed = json.loads(output.getvalue())
@@ -684,7 +800,7 @@ class GrokExecutionTests(unittest.TestCase):
             args = _run_args(directory)
             quota = subprocess.CompletedProcess([], 1, "", "insufficient_quota")
             transient = subprocess.CompletedProcess([], 1, "", "HTTP 429 transient rate limit")
-            with mock.patch.object(grok_execution, "_grok_binary", return_value="/bin/true"):
+            with mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"):
                 with (
                     mock.patch.object(grok_execution, "_supervised_run", return_value=quota),
                     self.assertRaises(grok_execution.QuotaExhausted) as raised_quota,
@@ -709,28 +825,17 @@ class GrokExecutionTests(unittest.TestCase):
         observed: dict[str, object] = {}
 
         def fake_run(command, _cwd=None, **_kwargs):
-            prompt_file = pathlib.Path(command[command.index("--prompt-file") + 1])
+            prompt_arg = next(part for part in command if str(part).startswith("@"))
+            prompt_file = pathlib.Path(str(prompt_arg)[1:])
             observed["argv"] = list(command)
             observed["mode"] = stat_mode(prompt_file)
             observed["content"] = prompt_file.read_text(encoding="utf-8")
             observed["path"] = prompt_file
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                json.dumps(
-                    {
-                        "sessionId": "sess-1",
-                        "stopReason": "end_turn",
-                        "modelUsage": {"grok-4.6-build": {"modelCalls": 1}},
-                        "text": "ok",
-                    }
-                ),
-                "",
-            )
+            return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
 
         with tempfile.TemporaryDirectory() as directory:
             with (
-                mock.patch.object(grok_execution, "_grok_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
                 mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
             ):
                 receipt = grok_execution._run(_run_args(directory))
@@ -739,7 +844,12 @@ class GrokExecutionTests(unittest.TestCase):
             joined = " ".join(str(part) for part in argv)
             self.assertNotIn(SECRET_PROMPT, joined)
             self.assertNotIn("--single", argv)
-            self.assertIn("--prompt-file", argv)
+            self.assertNotIn("grok", argv)
+            self.assertIn("--provider", argv)
+            self.assertIn("xai", argv)
+            self.assertIn("--thinking", argv)
+            self.assertIn("xhigh", argv)
+            self.assertTrue(any(str(part).startswith("@") for part in argv))
             self.assertEqual(observed["mode"], 0o600)
             content = observed["content"]
             assert isinstance(content, str)
@@ -759,6 +869,7 @@ class GrokExecutionTests(unittest.TestCase):
             cwd = pathlib.Path(directory).resolve()
             owned = [str(cwd / "owned.txt")]
             receipt_path = cwd / "receipt.json"
+            session_dir = str(cwd / "pi-sessions")
             receipt_path.write_text(
                 json.dumps(
                     {
@@ -768,34 +879,30 @@ class GrokExecutionTests(unittest.TestCase):
                         "working_directory": str(cwd),
                         "task_id": "quota-test",
                         "owned_paths": owned,
-                        "requested_model": grok_execution.REQUESTED_MODEL,
-                        "actual_model": grok_execution.ACTUAL_MODEL,
+                        "provider": "xai",
+                        "requested_model": "grok-4.6",
+                        "actual_model": "grok-4.6",
+                        "thinking": "xhigh",
+                        "session_dir": session_dir,
                     }
                 ),
                 encoding="utf-8",
             )
 
             def fake_run(command, _cwd=None, **_kwargs):
-                return subprocess.CompletedProcess(
-                    command,
-                    0,
-                    json.dumps(
-                        {
-                            "sessionId": "sess-1",
-                            "stopReason": "end_turn",
-                            "modelUsage": {"grok-4.6-build": {"modelCalls": 1}},
-                            "text": "ok",
-                        }
-                    ),
-                    "",
-                )
+                return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
 
             with (
-                mock.patch.object(grok_execution, "_grok_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
                 mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
             ):
                 receipt = grok_execution._run(
-                    _run_args(directory, session="sess-1", receipt=str(receipt_path))
+                    _run_args(
+                        directory,
+                        session="sess-1",
+                        receipt=str(receipt_path),
+                        session_dir=session_dir,
+                    )
                 )
             self.assertEqual(receipt["owned_paths"], owned)
             self.assertTrue(
@@ -803,16 +910,58 @@ class GrokExecutionTests(unittest.TestCase):
             )
             self.assertTrue(receipt["continued"])
 
+    def test_resume_wrong_thinking_is_rejected_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            owned = [str(cwd / "owned.txt")]
+            session_dir = str(cwd / "pi-sessions")
+            receipt_path = cwd / "receipt.json"
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema": grok_execution.SCHEMA,
+                        "status": "SUCCESS",
+                        "conversation_id": "sess-1",
+                        "working_directory": str(cwd),
+                        "task_id": "quota-test",
+                        "owned_paths": owned,
+                        "provider": "xai",
+                        "requested_model": "grok-4.6",
+                        "actual_model": "grok-4.6",
+                        "thinking": "low",
+                        "session_dir": session_dir,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(
+                    grok_execution.BridgeError,
+                    r"resume receipt binding mismatch: thinking",
+                ),
+            ):
+                grok_execution._run(
+                    _run_args(
+                        directory,
+                        session="sess-1",
+                        receipt=str(receipt_path),
+                        session_dir=session_dir,
+                    )
+                )
+            supervised.assert_not_called()
+
     def test_prompt_file_is_deleted_after_subprocess_failure(self) -> None:
         observed: dict[str, pathlib.Path] = {}
 
         def fake_run(command, _cwd=None, **_kwargs):
-            observed["path"] = pathlib.Path(command[command.index("--prompt-file") + 1])
+            prompt_arg = next(part for part in command if str(part).startswith("@"))
+            observed["path"] = pathlib.Path(str(prompt_arg)[1:])
             raise OSError("cli crashed")
 
         with tempfile.TemporaryDirectory() as directory:
             with (
-                mock.patch.object(grok_execution, "_grok_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
                 mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
                 self.assertRaises(OSError),
             ):
@@ -823,13 +972,26 @@ class GrokExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cwd = pathlib.Path(directory).resolve()
             owned = [str(cwd / "owned.txt")]
-            receipt = grok_execution._quota_receipt(cwd=cwd, task_id="batch-one", owned_paths=owned)
+            session_dir = str(cwd / "pi-sessions")
+            receipt = grok_execution._quota_receipt(
+                cwd=cwd,
+                task_id="batch-one",
+                owned_paths=owned,
+                provider="xai",
+                requested_model="grok-4.6",
+                thinking="xhigh",
+                fallback_reason="grok_quota_exhausted",
+            )
             task = grok_execution._batch_task(
                 {
                     "id": "batch-one",
                     "cwd": str(cwd),
                     "prompt": "task",
                     "owned_paths": owned,
+                    "provider": "xai",
+                    "model": "grok-4.6",
+                    "thinking": "xhigh",
+                    "session_dir": session_dir,
                 }
             )
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
@@ -876,6 +1038,163 @@ class GrokExecutionTests(unittest.TestCase):
             self.assertEqual(bound["owned_paths"], owned)
             self.assertEqual(bound["fallback_reason"], "grok_quota_exhausted")
             self.assertEqual(bound["requested_model"], "grok-4.6")
+
+    def test_refuses_grokcli_binary_and_ignores_grok_bin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            grok = pathlib.Path(directory) / "grok"
+            grok.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            grok.chmod(0o755)
+            with (
+                mock.patch.dict(os.environ, {"GROK_BIN": str(grok), "PI_BIN": ""}, clear=False),
+                mock.patch.object(grok_execution.shutil, "which", return_value=None),
+                self.assertRaisesRegex(grok_execution.BridgeError, "pi executable was not found"),
+            ):
+                grok_execution._pi_binary()
+            with (
+                mock.patch.dict(os.environ, {"PI_BIN": str(grok)}, clear=False),
+                self.assertRaisesRegex(grok_execution.BridgeError, "GrokCLI dispatch was removed"),
+            ):
+                grok_execution._pi_binary()
+
+    def test_jsonl_validates_provider_model_stop_and_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(
+                provider="xai",
+                model="grok-4.6",
+                stop="stop",
+                thinking="xhigh",
+                usage={
+                    "input": 9,
+                    "output": 3,
+                    "cacheRead": 1,
+                    "cacheWrite": 0,
+                    "reasoning": 5,
+                    "totalTokens": 18,
+                },
+            )
+
+            def fake_run(command, _cwd=None, **_kwargs):
+                return subprocess.CompletedProcess(command, 0, stdout, "")
+
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                receipt = grok_execution._run(_run_args(directory))
+            self.assertEqual(receipt["provider"], "xai")
+            self.assertEqual(receipt["actual_model"], "grok-4.6")
+            self.assertEqual(receipt["stop_reason"], "stop")
+            self.assertEqual(receipt["thinking"], "xhigh")
+            self.assertEqual(receipt["observed_thinking"], "xhigh")
+            self.assertEqual(receipt["assistant_calls"], 1)
+            self.assertEqual(receipt["usage"]["totalTokens"], 18)
+            self.assertEqual(receipt["usage_totals"]["reasoning"], 5)
+            self.assertTrue(pathlib.Path(receipt["events_path"]).is_file())
+            self.assertIn("message_end", pathlib.Path(receipt["events_path"]).read_text())
+
+    def test_zero_assistant_or_error_stop_is_not_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            empty = json.dumps({"type": "session", "id": "sess-1", "version": 3}) + "\n"
+            aborted = _pi_jsonl(stop="aborted")
+            mismatched = _pi_jsonl(provider="xai", model="other-model")
+            with mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"):
+                for stdout, pattern in (
+                    (empty, "zero assistant"),
+                    (aborted, "non-success stop reason"),
+                    (mismatched, "identity mismatch"),
+                ):
+                    with (
+                        mock.patch.object(
+                            grok_execution,
+                            "_supervised_run",
+                            return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                        ),
+                        self.assertRaisesRegex(grok_execution.BridgeError, pattern),
+                    ):
+                        grok_execution._run(_run_args(directory))
+
+    def test_deepseek_max_identity_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(
+                provider="qwen-token-plan-cn",
+                model="deepseek-v4.1-flash",
+                stop="stop",
+            )
+
+            def fake_run(command, _cwd=None, **_kwargs):
+                self.assertIn("qwen-token-plan-cn", command)
+                self.assertIn("deepseek-v4.1-flash", command)
+                self.assertIn("max", command)
+                return subprocess.CompletedProcess(command, 0, stdout, "")
+
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(
+                        directory,
+                        provider="qwen-token-plan-cn",
+                        model="deepseek-v4.1-flash",
+                        effort="max",
+                    )
+                )
+            self.assertEqual(receipt["provider"], "qwen-token-plan-cn")
+            self.assertEqual(receipt["actual_model"], "deepseek-v4.1-flash")
+            self.assertEqual(receipt["thinking"], "max")
+
+    def test_exit_zero_quota_error_message_authorizes_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(
+                stop="error",
+                error_message="insufficient_quota: weekly limit reached",
+            )
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                ),
+                self.assertRaises(grok_execution.QuotaExhausted) as raised,
+            ):
+                grok_execution._run(_run_args(directory))
+            self.assertEqual(raised.exception.receipt["fallback_reason"], "grok_quota_exhausted")
+            self.assertEqual(raised.exception.receipt["requested_model"], "grok-4.6")
+
+    def test_exit_zero_nonquota_error_does_not_authorize_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = _pi_jsonl(stop="error", error_message="authentication failed")
+            with (
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                ),
+                self.assertRaises(grok_execution.BridgeError) as raised,
+            ):
+                grok_execution._run(_run_args(directory))
+            self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+            self.assertIn("non-success stop reason", str(raised.exception))
+
+    def test_existing_session_dir_mode_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            session_dir = pathlib.Path(directory).resolve() / "shared-sessions"
+            session_dir.mkdir()
+            os.chmod(session_dir, 0o755)
+            resolved = grok_execution._session_dir(str(session_dir))
+            self.assertEqual(resolved, session_dir)
+            self.assertEqual(stat_mode(session_dir), 0o755)
+
+    def test_unknown_thinking_is_rejected_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(grok_execution.BridgeError, "unknown thinking"),
+            ):
+                grok_execution._run(_run_args(directory, effort="ultra"))
+            supervised.assert_not_called()
 
     def test_supervised_run_fails_closed_without_validated_pgid(self) -> None:
         class InvalidProc:
@@ -1142,7 +1461,23 @@ class GrokExecutionTests(unittest.TestCase):
             grok_execution._termination_handlers_installed = False
             with contextlib.redirect_stdout(io.StringIO()):
                 grok_execution.main(
-                    ["run", "--prompt", "x", "--task-id", "one", "--owned-path", "file.txt"]
+                    [
+                        "run",
+                        "--prompt",
+                        "x",
+                        "--task-id",
+                        "one",
+                        "--owned-path",
+                        "file.txt",
+                        "--provider",
+                        "xai",
+                        "--model",
+                        "grok-4.6",
+                        "--thinking",
+                        "xhigh",
+                        "--session-dir",
+                        str(pathlib.Path(tempfile.mkdtemp()).resolve()),
+                    ]
                 )
         self.assertEqual(blocked[0][0], signal.SIG_BLOCK)
         self.assertEqual(blocked[0][1], set(grok_execution._TERMINATION_SIGNALS))

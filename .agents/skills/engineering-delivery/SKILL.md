@@ -28,8 +28,8 @@ Read only the reference needed for the current task:
 - Python: [python.md](references/python.md)
 - Numerical, scientific, or research claims: [research.md](references/research.md)
 - Provenance or source selection: [source-index.md](references/source-index.md)
-- Grok PGID/signal internals: [grok-process-lifecycle.md](../grok-execution/references/grok-process-lifecycle.md)
-- Executor routing: run `python scripts/executor_routing.py select --local-config <file>` with `--capability` only when the task needs implementation. Choose among eligible candidates with `--executor <id> --reason <why>`. Quota fallback uses `validate-receipt`, never `--cause`. Spawn the registered Codex custom agent named in `invocation.agent`, or the Grok bridge; reinstall after model mapping changes. Do not assign implementation back to primary. Load grok-execution only when routing selected Grok.
+- Pi adapter PGID/signal internals: [grok-process-lifecycle.md](../grok-execution/references/grok-process-lifecycle.md)
+- Executor routing: run `python scripts/executor_routing.py select --local-config <file>` with `--capability` only when the task needs implementation. Choose among eligible candidates with `--executor <id> --reason <why>`. Quota fallback uses `validate-receipt`, never `--cause`. Spawn the registered Codex custom agent named in `invocation.agent`, or the Pi adapter (`invocation.kind = pi_bridge`); reinstall after model mapping changes. Do not assign implementation back to primary. Load grok-execution only when routing selected Grok or Pi. Never fall back to GrokCLI.
 
 Project-local instructions and explicit user requirements take precedence.
 

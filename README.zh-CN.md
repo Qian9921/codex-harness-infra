@@ -31,12 +31,12 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 复制 `package/local.example.toml` 并设置 `[routing].selection`：
 
-- `native_only`：只需 Codex，不要求 Grok 可执行文件或配额 receipt。
+- `native_only`：只需 Codex，不要求 Pi 可执行文件或配额 receipt。
 - `paid_preferred`：优先匹配的 paid/included executor；仅在 `[routing.fallback]` 允许的原因（如 `quota_exhausted`）下 fallback。
 - `paid_strict`：同样优先；付费候选不合适时阻断，除非有明确允许的 fallback 原因。
 - 省略 `[routing]`：兼容既有 Grok 优先、实际模型 receipt、仅配额 native fallback。
 
-支持的适配器只有 native Codex 与现有 Grok bridge。cost_preference 是用户声明，不是已核验余额。未知配额保持 unknown。模型更新只改本机映射，不因新 native slug 自动迁移。
+支持的适配器是 native Codex 与通用 Pi adapter（`backend = grok` 或 `backend = pi`）。cost_preference 是用户声明，不是已核验余额。未知配额保持 unknown。模型更新只改本机映射，不因新 native slug 自动迁移。禁止回退到 GrokCLI。
 
 ```text
 python scripts/executor_routing.py select --local-config <local-file> --capability implementation --tool workspace-write
@@ -56,7 +56,7 @@ python scripts/executor_routing.py select --local-config <local-file> --capabili
 
 ## 本机启用
 
-将 `package/local.example.toml` 复制到仓库外的本机路径。仅 Codex 安装只需 `[models]` 与 `native_only`；开场、Grok、GitHub 和可选工具可留空。需要外送时再设 `[delivery]`。运行 `python scripts/install.py install --local-config <local-file>`。模型名只写在本机配置中。用 `codex --profile v23-primary` 启动，并在 hook browser 中 trust V23 UserPromptSubmit hook。
+将 `package/local.example.toml` 复制到仓库外的本机路径。仅 Codex 安装只需 `[models]` 与 `native_only`；开场、Pi/Grok、GitHub 和可选工具可留空。需要外送时再设 `[delivery]`。运行 `python scripts/install.py install --local-config <local-file>`。模型名只写在本机配置中。用 `codex --profile v23-primary` 启动，并在 hook browser 中 trust V23 UserPromptSubmit hook。
 
 ## 从这里开始
 

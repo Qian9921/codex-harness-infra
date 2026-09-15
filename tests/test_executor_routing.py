@@ -88,6 +88,40 @@ executor = "luna-low"
 reviewer = "reviewer-model"
 """
 
+PI_FALLBACK = """
+[models]
+primary = "primary-model"
+executor = "native-slug-future"
+reviewer = "reviewer-model"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "pi_flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "deepseek-v4.1-flash"
+effort = "max"
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+
+[[routing.executors]]
+id = "native"
+backend = "codex"
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "unknown"
+availability = "configured"
+
+[routing.fallback]
+permit = ["quota_exhausted"]
+target = "native"
+"""
+
 
 class ExecutorRoutingTests(unittest.TestCase):
     def test_native_only_does_not_require_grok(self) -> None:
@@ -108,7 +142,10 @@ class ExecutorRoutingTests(unittest.TestCase):
             policy, capabilities=("implementation",), tools=("workspace-write",)
         )
         self.assertEqual(result.selected_id, "grok_build")
-        self.assertEqual(result.actual_model, "grok-4.6-build")
+        self.assertEqual(result.actual_model, "grok-4.6")
+        self.assertEqual(result.invocation["kind"], "pi_bridge")
+        self.assertEqual(result.invocation["provider"], "xai")
+        self.assertEqual(result.invocation["thinking"], "xhigh")
         self.assertFalse(result.fallback_authorized)
 
     def test_capability_mismatch_is_actionable(self) -> None:
@@ -181,7 +218,7 @@ class ExecutorRoutingTests(unittest.TestCase):
             "working_directory": "/tmp/work",
             "owned_paths": owned,
             "requested_model": "grok-4.6",
-            "actual_model": "grok-4.6-build",
+            "actual_model": "grok-4.6",
         }
         ok = validate_fallback_receipt(
             policy,
@@ -204,6 +241,52 @@ class ExecutorRoutingTests(unittest.TestCase):
         )
         self.assertEqual(bad.status, "blocked")
         self.assertIn("task_id", bad.blocked or "")
+
+    def test_pi_quota_receipt_requires_provider_and_thinking(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(PI_FALLBACK))
+        owned = ["/tmp/work/owned"]
+        matching = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "QUOTA_EXHAUSTED",
+            "fallback_reason": "pi_quota_exhausted",
+            "task_id": "task-1",
+            "working_directory": "/tmp/work",
+            "owned_paths": owned,
+            "requested_model": "deepseek-v4.1-flash",
+            "provider": "qwen-token-plan-cn",
+            "thinking": "max",
+        }
+        ok = validate_fallback_receipt(
+            policy,
+            matching,
+            task_id="task-1",
+            working_directory="/tmp/work",
+            owned_paths=owned,
+            capabilities=("implementation",),
+            tools=("workspace-write",),
+        )
+        self.assertEqual(ok.status, "fallback")
+        self.assertTrue(ok.fallback_authorized)
+        cases = (
+            ({**matching, "provider": None}, "provider"),
+            ({k: v for k, v in matching.items() if k != "provider"}, "provider"),
+            ({**matching, "provider": "xai"}, "provider"),
+            ({k: v for k, v in matching.items() if k != "thinking"}, "thinking"),
+            ({**matching, "thinking": "xhigh"}, "thinking"),
+        )
+        for receipt, field in cases:
+            blocked = validate_fallback_receipt(
+                policy,
+                receipt,
+                task_id="task-1",
+                working_directory="/tmp/work",
+                owned_paths=owned,
+                capabilities=("implementation",),
+                tools=("workspace-write",),
+            )
+            self.assertEqual(blocked.status, "blocked", field)
+            self.assertFalse(blocked.fallback_authorized)
+            self.assertIn(field, blocked.blocked or "")
 
     def test_cause_string_does_not_authorize_quota_fallback(self) -> None:
         policy = parse_policy(__import__("tomllib").loads(LEGACY))
@@ -334,6 +417,107 @@ class ExecutorRoutingTests(unittest.TestCase):
         text = PAID_BOTH.replace('backend = "grok"', 'backend = "grok"\nrequested_model = "grok-9"')
         with self.assertRaisesRegex(Exception, "unsupported Grok identity"):
             parse_policy(__import__("tomllib").loads(text))
+
+    def test_legacy_grok_build_alias_is_normalized(self) -> None:
+        text = PAID_BOTH.replace(
+            'backend = "grok"',
+            'backend = "grok"\nactual_model = "grok-4.6-build"',
+        )
+        policy = parse_policy(__import__("tomllib").loads(text))
+        grok = next(item for item in policy.executors if item.backend == "grok")
+        self.assertEqual(grok.actual_model, "grok-4.6")
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.actual_model, "grok-4.6")
+        self.assertEqual(result.invocation["model"], "grok-4.6")
+        self.assertIn("--model grok-4.6", result.invocation["how"])
+
+    def test_pi_requested_model_must_equal_actual_model(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "other-flash"
+effort = "max"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        with self.assertRaisesRegex(Exception, "requested_model must equal actual_model"):
+            parse_policy(__import__("tomllib").loads(text))
+
+    def test_thinking_levels_can_restrict_effort(self) -> None:
+        text = PAID_BOTH.replace(
+            'backend = "grok"',
+            'backend = "grok"\neffort = "max"\nthinking_levels = ["xhigh"]',
+        )
+        with self.assertRaisesRegex(Exception, "thinking_levels"):
+            parse_policy(__import__("tomllib").loads(text))
+        allowed = parse_policy(
+            __import__("tomllib").loads(
+                PAID_BOTH.replace(
+                    'backend = "grok"',
+                    'backend = "grok"\neffort = "max"',
+                )
+            )
+        )
+        grok = next(item for item in allowed.executors if item.backend == "grok")
+        self.assertEqual(grok.effort, "max")
+
+    def test_pi_backend_accepts_deepseek_max(self) -> None:
+        text = """
+[models]
+primary = "p"
+executor = "native-slug"
+reviewer = "r"
+
+[routing]
+selection = "paid_preferred"
+
+[[routing.executors]]
+id = "deepseek_flash"
+backend = "pi"
+provider = "qwen-token-plan-cn"
+requested_model = "deepseek-v4.1-flash"
+actual_model = "deepseek-v4.1-flash"
+effort = "max"
+capabilities = ["implementation"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+"""
+        policy = parse_policy(__import__("tomllib").loads(text))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.status, "selected")
+        self.assertEqual(result.backend, "pi")
+        self.assertEqual(result.invocation["kind"], "pi_bridge")
+        self.assertEqual(result.invocation["provider"], "qwen-token-plan-cn")
+        self.assertEqual(result.invocation["thinking"], "max")
+        self.assertIn("never GrokCLI", result.invocation["how"])
+
+    def test_native_only_does_not_require_pi(self) -> None:
+        policy = parse_policy(__import__("tomllib").loads(NATIVE_ONLY))
+        self.assertFalse(policy.grok_required)
+        self.assertFalse(grok_checks_required(policy))
+        result = select_executor(
+            policy, capabilities=("implementation",), tools=("workspace-write",)
+        )
+        self.assertEqual(result.backend, "codex")
+        self.assertEqual(result.invocation["kind"], "codex_subagent")
 
     def test_receipt_model_mismatch_blocks(self) -> None:
         policy = parse_policy(__import__("tomllib").loads(LEGACY))
@@ -473,7 +657,7 @@ class ExecutorRoutingTests(unittest.TestCase):
             NATIVE_ONLY + '\n[routing.fallback]\npermit = ["quota_exhausted"]\ntarget = "native"\n'
         )
         no_grok = no_grok.replace('selection = "native_only"', 'selection = "paid_preferred"')
-        with self.assertRaisesRegex(Exception, "Grok source"):
+        with self.assertRaisesRegex(Exception, "Grok or Pi source"):
             parse_policy(__import__("tomllib").loads(no_grok))
 
     def test_paid_strict_codex_paid_is_normal_role(self) -> None:

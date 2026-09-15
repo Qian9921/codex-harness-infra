@@ -28,8 +28,10 @@ SELECTION_PAID_PREFERRED = "paid_preferred"
 SELECTION_PAID_STRICT = "paid_strict"
 SELECTIONS = frozenset({SELECTION_NATIVE_ONLY, SELECTION_PAID_PREFERRED, SELECTION_PAID_STRICT})
 BACKEND_GROK = "grok"
+BACKEND_PI = "pi"
 BACKEND_CODEX = "codex"
-SUPPORTED_BACKENDS = frozenset({BACKEND_GROK, BACKEND_CODEX})
+EXTERNAL_BACKENDS = frozenset({BACKEND_GROK, BACKEND_PI})
+SUPPORTED_BACKENDS = frozenset({BACKEND_GROK, BACKEND_PI, BACKEND_CODEX})
 COST_PAID_INCLUDED = "paid_included"
 COST_METERED = "metered"
 COST_UNKNOWN = "unknown"
@@ -43,8 +45,14 @@ PERMITTED_FALLBACK_CAUSES = frozenset({PERMIT_QUOTA})
 GENERIC_FAILURE_CAUSES = frozenset(
     {"network", "auth", "timeout", "bridge", "http_429", "malformed_receipt"}
 )
+GROK_PROVIDER = "xai"
 GROK_REQUESTED_MODEL = "grok-4.6"
-GROK_ACTUAL_MODEL = "grok-4.6-build"
+GROK_ACTUAL_MODEL = "grok-4.6"
+GROK_LEGACY_ACTUAL_MODEL = "grok-4.6-build"
+GROK_EFFORT = "xhigh"
+THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
+FALLBACK_REASON_GROK = "grok_quota_exhausted"
+FALLBACK_REASON_PI = "pi_quota_exhausted"
 LEGACY_GROK_ID = "grok_build"
 LEGACY_NATIVE_ID = "native"
 SCHEMA = "codex-executor-routing.v1"
@@ -54,6 +62,30 @@ EXECUTOR_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 
 class RoutingError(RuntimeError):
     """Local routing configuration or selection could not be used."""
+
+
+def is_external_backend(backend: str) -> bool:
+    return backend in EXTERNAL_BACKENDS
+
+
+def fallback_reason_for(backend: str, provider: str = "", model: str = "") -> str:
+    if backend == BACKEND_GROK or (provider == GROK_PROVIDER and model == GROK_REQUESTED_MODEL):
+        return FALLBACK_REASON_GROK
+    return FALLBACK_REASON_PI
+
+
+def validate_thinking(
+    provider: str,
+    model: str,
+    effort: str,
+    allowed: frozenset[str] = frozenset(),
+) -> None:
+    if effort not in THINKING_LEVELS:
+        raise RoutingError(f"unknown thinking level {effort!r}")
+    if allowed and effort not in allowed:
+        raise RoutingError(
+            f"thinking {effort!r} is not in executor thinking_levels for {provider}/{model}"
+        )
 
 
 @dataclass(frozen=True)
@@ -66,6 +98,9 @@ class ExecutorSpec:
     tools: frozenset[str]
     cost_preference: str
     availability: str
+    provider: str = ""
+    effort: str = ""
+    thinking_levels: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -159,6 +194,8 @@ def _legacy_policy(config: dict[str, Any]) -> RoutingPolicy:
         tools=frozenset({"workspace-write"}),
         cost_preference=COST_PAID_INCLUDED,
         availability=AVAIL_CONFIGURED,
+        provider=GROK_PROVIDER,
+        effort=GROK_EFFORT,
     )
     native = ExecutorSpec(
         id=LEGACY_NATIVE_ID,
@@ -216,15 +253,54 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
         requested = ""
     if not isinstance(actual, str):
         actual = ""
+    provider = raw.get("provider", "")
+    if not isinstance(provider, str):
+        provider = ""
+    provider = provider.strip()
+    effort = raw.get("effort", "")
+    if not isinstance(effort, str):
+        effort = ""
+    effort = effort.strip()
+    thinking_levels = frozenset(
+        _string_list(raw.get("thinking_levels"), f"executor {ident} thinking_levels")
+    )
+    unknown_levels = sorted(thinking_levels - THINKING_LEVELS)
+    if unknown_levels:
+        raise RoutingError(f"executor {ident!r} has unknown thinking level {unknown_levels[0]!r}")
     if backend == BACKEND_GROK:
+        provider = provider or GROK_PROVIDER
         requested = requested.strip() or GROK_REQUESTED_MODEL
         actual = actual.strip() or GROK_ACTUAL_MODEL
-        if requested != GROK_REQUESTED_MODEL or actual != GROK_ACTUAL_MODEL:
+        if actual == GROK_LEGACY_ACTUAL_MODEL:
+            actual = GROK_ACTUAL_MODEL
+        effort = effort or GROK_EFFORT
+        if (
+            provider != GROK_PROVIDER
+            or requested != GROK_REQUESTED_MODEL
+            or actual != GROK_ACTUAL_MODEL
+        ):
             raise RoutingError(
-                f"executor {ident.strip()!r} uses unsupported Grok identity "
-                f"{requested}/{actual}; the bridge is fixed "
-                f"{GROK_REQUESTED_MODEL}/{GROK_ACTUAL_MODEL}"
+                f"executor {ident!r} uses unsupported Grok identity "
+                f"{provider}/{requested}/{actual}; the Pi adapter for backend grok is fixed "
+                f"{GROK_PROVIDER}/{GROK_REQUESTED_MODEL}/{GROK_ACTUAL_MODEL}"
             )
+        validate_thinking(provider, requested, effort, thinking_levels)
+    elif backend == BACKEND_PI:
+        requested = requested.strip()
+        actual = actual.strip()
+        if not provider or not requested or not actual or not effort:
+            raise RoutingError(
+                f"executor {ident!r} backend pi requires provider, requested_model, "
+                "actual_model, and effort"
+            )
+        if requested != actual:
+            raise RoutingError(
+                f"executor {ident!r} requested_model must equal actual_model; "
+                "the Pi adapter has a single --model identity"
+            )
+        validate_thinking(provider, requested, effort, thinking_levels)
+    elif provider or effort or thinking_levels:
+        raise RoutingError(f"executor {ident!r} Codex backend cannot set Pi identity fields")
     return ExecutorSpec(
         id=ident.strip(),
         backend=backend,
@@ -236,6 +312,9 @@ def _parse_executor(raw: Any, config: dict[str, Any]) -> ExecutorSpec:
         tools=frozenset(_string_list(raw.get("tools"), f"executor {ident} tools")),
         cost_preference=cost,
         availability=availability,
+        provider=provider,
+        effort=effort,
+        thinking_levels=thinking_levels,
     )
 
 
@@ -275,10 +354,10 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
     target_id = target.strip() if isinstance(target, str) else None
     if target_id and target_id not in ids:
         raise RoutingError(f"fallback target {target_id!r} is not a configured executor")
-    grok_sources = [item for item in executors if item.backend == BACKEND_GROK]
+    grok_sources = [item for item in executors if is_external_backend(item.backend)]
     if PERMIT_QUOTA in permit:
         if not grok_sources:
-            raise RoutingError("quota fallback requires a configured Grok source")
+            raise RoutingError("quota fallback requires a configured Grok or Pi source")
         if not target_id:
             raise RoutingError("quota fallback requires a Codex target")
         target_spec = next(item for item in executors if item.id == target_id)
@@ -303,7 +382,7 @@ def parse_policy(config: dict[str, Any]) -> RoutingPolicy:
         native_is_fallback=native_is_fallback,
     )
     grok_required = any(
-        item.backend == BACKEND_GROK
+        is_external_backend(item.backend)
         and item.availability == AVAIL_CONFIGURED
         and mode_allows_initial(tentative, item)
         for item in executors
@@ -388,7 +467,7 @@ def is_quota_fallback_target(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
         PERMIT_QUOTA in policy.fallback_permit
         and policy.fallback_target == spec.id
         and spec.backend == BACKEND_CODEX
-        and any(item.backend == BACKEND_GROK for item in policy.executors)
+        and any(is_external_backend(item.backend) for item in policy.executors)
     )
 
 
@@ -422,17 +501,21 @@ def mode_allows_initial(policy: RoutingPolicy, spec: ExecutorSpec) -> bool:
 
 
 def dispatch_plan(spec: ExecutorSpec, policy: RoutingPolicy) -> dict[str, Any]:
-    if spec.backend == BACKEND_GROK:
+    if is_external_backend(spec.backend):
         return {
-            "kind": "grok_bridge",
+            "kind": "pi_bridge",
             "agent": None,
             "config_file": "bin/grok-execution.py",
+            "provider": spec.provider,
             "model": spec.actual_model,
+            "thinking": spec.effort,
             "how": (
-                "Invoke the installed Grok bridge with Python: "
+                "Invoke the installed Pi adapter with Python, never GrokCLI: "
                 'python "${CODEX_HOME}/bin/grok-execution.py" run --cwd <dir> '
-                "--task-id <id> --owned-path <path> --prompt-file <file>. "
-                "The bridge identity is fixed grok-4.6 / grok-4.6-build."
+                "--task-id <id> --owned-path <path> --prompt-file <file> "
+                f"--provider {spec.provider} --model {spec.actual_model} "
+                f"--thinking {spec.effort} --session-dir <dir>. "
+                "Validate Pi-reported provider/model/stopReason from JSONL; do not fall back to grok."
             ),
         }
     agent = executor_agent_name(spec, policy)
@@ -631,7 +714,7 @@ def select_executor(
             problems = "; ".join(
                 f"{spec.id}: {problem or spec.cost_preference}"
                 for problem, spec in candidates
-                if spec.cost_preference == COST_PAID_INCLUDED or spec.backend == BACKEND_GROK
+                if spec.cost_preference == COST_PAID_INCLUDED or is_external_backend(spec.backend)
             )
             return _blocked(
                 policy,
@@ -676,7 +759,7 @@ def validate_fallback_receipt(
 ) -> SelectionResult:
     """Authorize native fallback only from a bound quota receipt."""
 
-    grok_sources = [item for item in policy.executors if item.backend == BACKEND_GROK]
+    grok_sources = [item for item in policy.executors if is_external_backend(item.backend)]
     if (
         policy.selection == SELECTION_NATIVE_ONLY
         or not grok_sources
@@ -698,24 +781,6 @@ def validate_fallback_receipt(
         return _blocked(policy, "owned paths must be absolute")
     if len(normalized_owned) != len(set(normalized_owned)):
         return _blocked(policy, "owned paths must be unique")
-    required = {
-        "schema": RECEIPT_SCHEMA,
-        "status": "QUOTA_EXHAUSTED",
-        "fallback_reason": "grok_quota_exhausted",
-        "task_id": task_id,
-        "working_directory": str(cwd),
-        "owned_paths": normalized_owned,
-        "requested_model": GROK_REQUESTED_MODEL,
-    }
-    mismatched = [key for key, value in required.items() if receipt.get(key) != value]
-    actual = receipt.get("actual_model")
-    if actual is not None and actual != GROK_ACTUAL_MODEL:
-        mismatched.append("actual_model")
-    if mismatched:
-        return _blocked(
-            policy,
-            "fallback receipt binding mismatch: " + ", ".join(mismatched),
-        )
     usable_sources = [
         item
         for item in grok_sources
@@ -726,17 +791,51 @@ def validate_fallback_receipt(
     if source_id:
         source = next((item for item in grok_sources if item.id == source_id), None)
         if source is None or source not in usable_sources:
-            return _blocked(policy, f"source {source_id!r} is not an eligible Grok executor")
+            return _blocked(policy, f"source {source_id!r} is not an eligible Grok or Pi executor")
     elif len(usable_sources) == 1:
         source = usable_sources[0]
     elif len(usable_sources) > 1:
         return _blocked(
             policy,
-            "multiple Grok sources; pass --source <id>: "
+            "multiple Grok or Pi sources; pass --source <id>: "
             + ", ".join(item.id for item in usable_sources),
         )
     else:
-        return _blocked(policy, "no eligible Grok source for this task")
+        return _blocked(policy, "no eligible Grok or Pi source for this task")
+    required = {
+        "schema": RECEIPT_SCHEMA,
+        "status": "QUOTA_EXHAUSTED",
+        "fallback_reason": fallback_reason_for(
+            source.backend, source.provider, source.requested_model
+        ),
+        "task_id": task_id,
+        "working_directory": str(cwd),
+        "owned_paths": normalized_owned,
+        "requested_model": source.requested_model,
+    }
+    mismatched = [key for key, value in required.items() if receipt.get(key) != value]
+    actual = receipt.get("actual_model")
+    if actual == GROK_LEGACY_ACTUAL_MODEL:
+        actual = GROK_ACTUAL_MODEL
+    if actual is not None and actual != source.actual_model:
+        mismatched.append("actual_model")
+    provider = receipt.get("provider")
+    thinking = receipt.get("thinking")
+    if source.backend == BACKEND_PI:
+        if provider != source.provider:
+            mismatched.append("provider")
+        if thinking != source.effort:
+            mismatched.append("thinking")
+    else:
+        if provider is not None and provider != source.provider:
+            mismatched.append("provider")
+        if thinking is not None and thinking != source.effort:
+            mismatched.append("thinking")
+    if mismatched:
+        return _blocked(
+            policy,
+            "fallback receipt binding mismatch: " + ", ".join(mismatched),
+        )
     target = _by_id(policy, policy.fallback_target)
     mismatch = _capability_match(target, capabilities, tools) or _availability_block(target)
     if mismatch:
@@ -814,10 +913,11 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
     if spec is not None and is_fallback_only_role(policy, spec):
         return (
             "You are the native fallback executor for one scoped change. Act only when the\n"
-            "parent supplies a verified Grok bridge receipt with status QUOTA_EXHAUSTED and\n"
-            "fallback_reason grok_quota_exhausted, and the receipt task_id, absolute\n"
-            "working_directory, and owned_paths match this task exactly. Generic HTTP 429,\n"
-            "authentication, network, or timeout errors are not quota exhaustion. Otherwise\n"
+            "parent supplies a verified Grok or Pi adapter receipt with status QUOTA_EXHAUSTED\n"
+            "and fallback_reason grok_quota_exhausted or pi_quota_exhausted, and the receipt\n"
+            "task_id, absolute working_directory, and owned_paths match this task exactly.\n"
+            "Generic HTTP 429, authentication, network, or timeout errors are not quota\n"
+            "exhaustion. Otherwise\n"
             "stop with GROK_FALLBACK_NOT_AUTHORIZED. When authorized, make the smallest\n"
             "complete change, keep one writer per worktree, and leave concise test evidence.\n"
             f"{reuse} {tools} "
@@ -832,8 +932,8 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
     if policy.selection == SELECTION_PAID_PREFERRED:
         return (
             "You are a native Codex executor that may be selected initially when you are the\n"
-            "capability-fit candidate, including when a paid Grok candidate is unavailable.\n"
-            "That initial selection is not a quota fallback. After a Grok attempt, switch to\n"
+            "capability-fit candidate, including when a paid Grok or Pi candidate is unavailable.\n"
+            "That initial selection is not a quota fallback. After a Grok or Pi attempt, switch to\n"
             "this agent only with a bound QUOTA_EXHAUSTED receipt; network, auth, timeout,\n"
             "and bridge errors are not quota. Make the smallest complete change, keep one\n"
             "writer per worktree, and leave concise test evidence. "
@@ -844,7 +944,7 @@ def executor_agent_instructions(policy: RoutingPolicy, spec: ExecutorSpec | None
     if policy.selection == SELECTION_NATIVE_ONLY:
         return (
             "You are the native implementation executor for one scoped change. This\n"
-            "native_only route is complete: Grok is not required and no quota receipt is\n"
+            "native_only route is complete: Grok or Pi is not required and no quota receipt is\n"
             "needed. Make the smallest complete change, keep one writer per worktree, and\n"
             "leave concise test evidence. "
             f"{reuse} {tools} "
@@ -931,6 +1031,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "tools": sorted(item.tools),
                         "cost_preference": item.cost_preference,
                         "availability": item.availability,
+                        "provider": item.provider,
+                        "effort": item.effort,
                     }
                     for item in policy.executors
                 ],

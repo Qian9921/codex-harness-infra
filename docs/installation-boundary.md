@@ -1,6 +1,6 @@
 # Installation boundary
 
-Installation is deliberately narrow. It makes the portable policy and logical role templates available to Codex, installs the delivery and Grok-execution Skills, and configures the small local adapters needed for runtime-state injection, opt-in bounded search, and authorized GitHub delivery.
+Installation is deliberately narrow. It makes the portable policy and logical role templates available to Codex, installs the delivery and Grok/Pi-execution Skills, and configures the small local adapters needed for runtime-state injection, opt-in bounded search, and authorized GitHub delivery.
 
 ## Ownership
 

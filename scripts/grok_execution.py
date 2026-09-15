@@ -1,4 +1,4 @@
-"""Run Grok Build's pinned execution model with Codex-safe receipts."""
+"""Run the generic Pi adapter with Codex-safe receipts."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -17,9 +18,13 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-REQUESTED_MODEL = "grok-4.6"
-ACTUAL_MODEL = "grok-4.6-build"
-EXECUTION_EFFORT = "low"
+GROK_PROVIDER = "xai"
+GROK_MODEL = "grok-4.6"
+THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
+SUCCESS_STOP_REASONS = frozenset({"stop"})
+FAILED_STOP_REASONS = frozenset({"error", "aborted", "length", "pending"})
+PI_TOOLS = "read,bash,edit,write"
+TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
 DEFAULT_TIMEOUT_SECONDS = None
@@ -66,14 +71,24 @@ def _is_quota_exhaustion(detail: str) -> bool:
     return any(marker in normalized for marker in QUOTA_EXHAUSTION_MARKERS)
 
 
-def _grok_binary() -> str:
-    candidate = os.environ.get("GROK_BIN") or shutil.which("grok")
+def _pi_binary() -> str:
+    candidate = os.environ.get("PI_BIN") or shutil.which("pi")
     if not candidate:
-        raise BridgeError("grok executable was not found")
+        raise BridgeError("pi executable was not found")
     path = pathlib.Path(candidate).expanduser()
     if not path.is_file() or not os.access(path, os.X_OK):
-        raise BridgeError("grok executable is not an executable file")
-    return str(path.resolve())
+        raise BridgeError("pi executable is not an executable file")
+    resolved = path.resolve()
+    if resolved.name in {"grok", "grok.exe"}:
+        raise BridgeError("GrokCLI dispatch was removed; set PI_BIN to the Pi executable")
+    return str(resolved)
+
+
+def _validate_identity(provider: str, model: str, thinking: str) -> None:
+    if not provider.strip() or not model.strip() or not thinking.strip():
+        raise BridgeError("provider, model, and thinking are required")
+    if thinking not in THINKING_LEVELS:
+        raise BridgeError(f"unknown thinking level {thinking!r}")
 
 
 def _directory(value: str) -> pathlib.Path:
@@ -86,7 +101,13 @@ def _directory(value: str) -> pathlib.Path:
 def _required_task_id(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BridgeError("task-id is required and must be nonempty")
-    return value
+    task_id = value.strip()
+    if not TASK_ID_RE.fullmatch(task_id):
+        raise BridgeError(
+            "task-id must be a portable filename token "
+            "[A-Za-z][A-Za-z0-9_-]{0,62} without path separators"
+        )
+    return task_id
 
 
 def _prompt(args: argparse.Namespace) -> str:
@@ -106,6 +127,11 @@ def _resume_binding(
     cwd: pathlib.Path,
     owned_paths: Sequence[str],
     task_id: str,
+    *,
+    provider: str,
+    model: str,
+    thinking: str,
+    session_dir: pathlib.Path,
 ) -> None:
     if args.session is None:
         return
@@ -120,29 +146,161 @@ def _resume_binding(
         "working_directory": str(cwd),
         "task_id": task_id,
         "owned_paths": list(owned_paths),
-        "requested_model": REQUESTED_MODEL,
-        "actual_model": ACTUAL_MODEL,
+        "provider": provider,
+        "requested_model": model,
+        "actual_model": model,
+        "thinking": thinking,
+        "session_dir": str(session_dir),
     }
     mismatched = [key for key, value in expected.items() if receipt.get(key) != value]
     if mismatched:
         raise BridgeError("resume receipt binding mismatch: " + ", ".join(mismatched))
 
 
-def _extract_result(stdout: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    candidates: list[dict[str, Any]] = []
-    for offset, character in enumerate(stdout):
-        if character != "{":
+def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line:
             continue
         try:
-            value, _end = decoder.raw_decode(stdout[offset:])
+            value = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict) and "sessionId" in value and "stopReason" in value:
-            candidates.append(value)
-    if not candidates:
-        raise BridgeError("grok did not return a structured session result")
-    return candidates[-1]
+        if isinstance(value, dict) and isinstance(value.get("type"), str):
+            events.append(value)
+    if not events:
+        raise BridgeError("pi did not return a JSONL event stream")
+    return events
+
+
+def _session_header(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    for event in events:
+        if event.get("type") == "session" and isinstance(event.get("id"), str) and event["id"]:
+            return event
+    raise BridgeError("pi JSONL lacks a session header")
+
+
+def _assistant_message_ends(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message")
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            found.append(message)
+    return found
+
+
+def _assistant_text(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if (
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ):
+            parts.append(block["text"])
+    return "".join(parts)
+
+
+def _usage_from_assistants(messages: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    totals = {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0,
+        "totalTokens": 0,
+    }
+    last: dict[str, Any] | None = None
+    for message in messages:
+        usage = message.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        last = usage
+        for key in totals:
+            value = usage.get(key)
+            if type(value) is int:
+                totals[key] += value
+    return {"totals": totals, "last": last}
+
+
+def _observed_thinking(events: Sequence[dict[str, Any]]) -> str | None:
+    observed: str | None = None
+    for event in events:
+        if event.get("type") == "thinking_level_change" and isinstance(
+            event.get("thinkingLevel"), str
+        ):
+            observed = event["thinkingLevel"]
+    return observed
+
+
+def _completed_result(
+    events: Sequence[dict[str, Any]],
+    *,
+    provider: str,
+    model: str,
+    session_id_expected: str | None,
+) -> dict[str, Any]:
+    header = _session_header(events)
+    session_id = header["id"]
+    if session_id_expected is not None and session_id != session_id_expected:
+        raise BridgeError("pi resume returned a different session ID")
+    assistants = _assistant_message_ends(events)
+    if not assistants:
+        raise BridgeError("pi session had zero assistant message_end events")
+    last = assistants[-1]
+    stop = last.get("stopReason")
+    if stop in FAILED_STOP_REASONS or stop not in SUCCESS_STOP_REASONS:
+        raise BridgeError(f"pi returned non-success stop reason: {stop!r}")
+    observed_provider = last.get("provider")
+    observed_model = last.get("model")
+    if observed_provider != provider or observed_model != model:
+        raise BridgeError(
+            f"pi identity mismatch: expected {provider}/{model}, "
+            f"got {observed_provider}/{observed_model}"
+        )
+    usage = _usage_from_assistants(assistants)
+    return {
+        "session_id": session_id,
+        "provider": observed_provider,
+        "model": observed_model,
+        "stop_reason": stop,
+        "thinking": _observed_thinking(events),
+        "usage": usage["last"],
+        "usage_totals": usage["totals"],
+        "response": _assistant_text(last),
+        "assistant_calls": len(assistants),
+    }
+
+
+def _jsonl_error_detail(events: Sequence[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for event in events:
+        if isinstance(event.get("errorMessage"), str) and event["errorMessage"].strip():
+            parts.append(event["errorMessage"])
+        error = event.get("error")
+        if isinstance(error, str) and error.strip():
+            parts.append(error)
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        err = message.get("errorMessage")
+        if isinstance(err, str) and err.strip():
+            parts.append(err)
+        if message.get("role") == "assistant" and message.get("stopReason") == "error":
+            text = _assistant_text(message)
+            if text.strip():
+                parts.append(text)
+    return "\n".join(parts)
 
 
 def _owned_paths(cwd: pathlib.Path, values: Sequence[str]) -> list[str]:
@@ -240,7 +398,7 @@ def _bound_prompt(
 ) -> str:
     helper = _bounded_search_helper()
     return (
-        "You are grok_execution, the preferred external execution lead managed by Codex.\n"
+        "You are the selected external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
         f"Task ID: {task_id}\n"
         "Exclusive writable paths: "
@@ -264,7 +422,11 @@ def _quota_receipt(
     cwd: pathlib.Path,
     task_id: str,
     owned_paths: Sequence[str],
+    provider: str,
+    requested_model: str,
+    thinking: str,
     actual_model: str | None = None,
+    fallback_reason: str,
 ) -> dict[str, Any]:
     receipt: dict[str, Any] = {
         "schema": SCHEMA,
@@ -272,43 +434,90 @@ def _quota_receipt(
         "task_id": task_id,
         "working_directory": str(cwd),
         "owned_paths": list(owned_paths),
-        "requested_model": REQUESTED_MODEL,
-        "fallback_reason": "grok_quota_exhausted",
+        "provider": provider,
+        "requested_model": requested_model,
+        "thinking": thinking,
+        "fallback_reason": fallback_reason,
     }
     if actual_model:
         receipt["actual_model"] = actual_model
     return receipt
 
 
+def _session_dir(value: Any) -> pathlib.Path:
+    if not isinstance(value, str) or not value.strip():
+        raise BridgeError("session-dir is required")
+    path = pathlib.Path(value).expanduser()
+    if not path.is_absolute():
+        raise BridgeError("session-dir must be an absolute path")
+    existed = path.exists()
+    if existed and (path.is_symlink() or not path.is_dir()):
+        raise BridgeError(f"session-dir is not a directory: {value}")
+    path.mkdir(parents=True, exist_ok=True)
+    if not existed:
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+    if not path.is_dir() or path.is_symlink():
+        raise BridgeError(f"session-dir is not a directory: {value}")
+    return path.resolve()
+
+
+def _persist_events(session_dir: pathlib.Path, task_id: str, stdout: str) -> pathlib.Path:
+    path = session_dir / f"{task_id}.stdout.jsonl"
+    path.write_text(stdout, encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
+def _fallback_reason(provider: str, model: str) -> str:
+    if provider == GROK_PROVIDER and model == GROK_MODEL:
+        return "grok_quota_exhausted"
+    return "pi_quota_exhausted"
+
+
 def _command(
     *,
     binary: str,
-    cwd: pathlib.Path,
     prompt_file: pathlib.Path,
     session_id: str | None,
-    effort: str,
-    mode: str,
+    session_dir: pathlib.Path,
+    provider: str,
+    model: str,
+    thinking: str,
+    task_id: str,
 ) -> list[str]:
-    if effort != EXECUTION_EFFORT:
-        raise BridgeError(f"execution effort must be {EXECUTION_EFFORT}")
+    _validate_identity(provider, model, thinking)
     command = [
         binary,
-        "--cwd",
-        str(cwd),
+        "--provider",
+        provider,
         "--model",
-        REQUESTED_MODEL,
-        "--reasoning-effort",
-        effort,
-        "--permission-mode",
-        "plan" if mode == "plan" else "bypassPermissions",
-        "--output-format",
+        model,
+        "--thinking",
+        thinking,
+        "--mode",
         "json",
-        "--no-subagents",
-        "--prompt-file",
-        str(prompt_file),
+        "-p",
+        "--session-dir",
+        str(session_dir),
+        "--no-context-files",
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-approve",
+        "--tools",
+        PI_TOOLS,
+        f"@{prompt_file}",
     ]
     if session_id:
-        command.extend(("--resume", session_id))
+        command[-1:-1] = ["--session", session_id]
+    else:
+        command[-1:-1] = ["--name", task_id]
     return command
 
 
@@ -700,7 +909,21 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     cwd = _directory(args.cwd)
     task_id = _required_task_id(getattr(args, "task_id", None))
     owned_paths = _owned_paths(cwd, getattr(args, "owned_path", ()))
-    _resume_binding(args, cwd, owned_paths, task_id)
+    provider = str(getattr(args, "provider", "") or "")
+    model = str(getattr(args, "model", "") or "")
+    thinking = str(getattr(args, "effort", "") or "")
+    _validate_identity(provider, model, thinking)
+    session_dir = _session_dir(getattr(args, "session_dir", None))
+    _resume_binding(
+        args,
+        cwd,
+        owned_paths,
+        task_id,
+        provider=provider,
+        model=model,
+        thinking=thinking,
+        session_dir=session_dir,
+    )
     bound = _bound_prompt(
         _prompt(args),
         cwd,
@@ -712,12 +935,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         prompt_path = _write_prompt_file(bound)
         command = _command(
-            binary=_grok_binary(),
-            cwd=cwd,
+            binary=_pi_binary(),
             prompt_file=prompt_path,
             session_id=args.session,
-            effort=args.effort,
-            mode=args.mode,
+            session_dir=session_dir,
+            provider=provider,
+            model=model,
+            thinking=thinking,
+            task_id=task_id,
         )
         completed = _supervised_run(
             command,
@@ -728,57 +953,86 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         if prompt_path is not None:
             prompt_path.unlink(missing_ok=True)
     wall_seconds = time.monotonic() - started
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    events_path = _persist_events(session_dir, task_id, stdout)
+    events: list[dict[str, Any]] | None = None
+    jsonl_detail = ""
+    if stdout.strip():
+        try:
+            events = _parse_jsonl(stdout)
+            jsonl_detail = _jsonl_error_detail(events)
+        except BridgeError:
+            events = None
+    detail = "\n".join(part for part in ((stderr or stdout).strip(), jsonl_detail) if part)
+    if _is_quota_exhaustion(detail):
+        raise QuotaExhausted(
+            "account quota is exhausted",
+            _quota_receipt(
+                cwd=cwd,
+                task_id=task_id,
+                owned_paths=owned_paths,
+                provider=provider,
+                requested_model=model,
+                thinking=thinking,
+                fallback_reason=_fallback_reason(provider, model),
+            ),
+        )
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        if _is_quota_exhaustion(detail):
-            raise QuotaExhausted(
-                "Grok account quota is exhausted",
-                _quota_receipt(cwd=cwd, task_id=task_id, owned_paths=owned_paths),
-            )
-        raise BridgeError(f"grok failed with exit code {completed.returncode}: {detail}")
-    result = _extract_result(completed.stdout)
-    if result.get("stopReason") != "end_turn":
-        raise BridgeError(f"grok returned non-success stop reason: {result.get('stopReason')!r}")
-    model_usage = result.get("modelUsage")
-    actual_usage = model_usage.get(ACTUAL_MODEL) if isinstance(model_usage, dict) else None
-    if (
-        not isinstance(model_usage, dict)
-        or set(model_usage) != {ACTUAL_MODEL}
-        or not isinstance(actual_usage, dict)
-        or type(actual_usage.get("modelCalls")) is not int
-        or actual_usage["modelCalls"] <= 0
-    ):
-        raise BridgeError("grok result does not prove the pinned runtime model")
-    session_id = result.get("sessionId")
-    if not isinstance(session_id, str) or not session_id:
-        raise BridgeError("grok result lacks a valid session ID")
-    if args.session is not None and session_id != args.session:
-        raise BridgeError("grok resume returned a different session ID")
+        raise BridgeError(f"pi failed with exit code {completed.returncode}: {detail}")
+    if events is None:
+        raise BridgeError("pi did not return a JSONL event stream")
+    parsed = _completed_result(
+        events,
+        provider=provider,
+        model=model,
+        session_id_expected=args.session,
+    )
+    if parsed["thinking"] is not None and parsed["thinking"] != thinking:
+        raise BridgeError(f"pi thinking mismatch: expected {thinking}, got {parsed['thinking']}")
     return {
         "schema": SCHEMA,
         "status": "SUCCESS",
-        "provider": "grok-build-cli",
-        "requested_model": REQUESTED_MODEL,
-        "actual_model": ACTUAL_MODEL,
+        "provider": parsed["provider"],
+        "requested_model": model,
+        "actual_model": parsed["model"],
+        "thinking": thinking,
+        "observed_thinking": parsed["thinking"],
         "working_directory": str(cwd),
         "task_id": task_id,
         "owned_paths": owned_paths,
-        "conversation_id": session_id,
+        "conversation_id": parsed["session_id"],
+        "session_dir": str(session_dir),
+        "events_path": str(events_path),
         "continued": args.session is not None,
         "wall_seconds": round(wall_seconds, 6),
-        "usage": result.get("usage"),
-        "cost_usd": result.get("total_cost_usd"),
-        "response": result.get("text", ""),
+        "usage": parsed["usage"],
+        "usage_totals": parsed["usage_totals"],
+        "assistant_calls": parsed["assistant_calls"],
+        "stop_reason": parsed["stop_reason"],
+        "response": parsed["response"],
     }
 
 
 def _batch_task(value: Any) -> argparse.Namespace:
     if not isinstance(value, dict):
         raise BridgeError("each batch task must be an object")
-    required = {"id", "cwd", "prompt", "owned_paths"}
+    required = {
+        "id",
+        "cwd",
+        "prompt",
+        "owned_paths",
+        "provider",
+        "model",
+        "thinking",
+        "session_dir",
+    }
     allowed = required | {"effort", "timeout"}
     if set(value) - allowed or not required.issubset(value):
-        raise BridgeError("batch task fields must be id, cwd, prompt, owned_paths, effort, timeout")
+        raise BridgeError(
+            "batch task fields must be id, cwd, prompt, owned_paths, provider, model, "
+            "thinking, session_dir, effort, timeout"
+        )
     task_id = value["id"]
     if not isinstance(task_id, str) or not task_id.strip():
         raise BridgeError("batch task id must be a nonempty string")
@@ -790,20 +1044,31 @@ def _batch_task(value: Any) -> argparse.Namespace:
         or not all(isinstance(item, str) and item for item in value["owned_paths"])
     ):
         raise BridgeError(f"batch task {task_id!r} requires nonempty owned_paths")
-    effort = value.get("effort", "low")
+    provider = value["provider"]
+    model = value["model"]
+    thinking = value.get("thinking", value.get("effort"))
+    if not isinstance(provider, str) or not isinstance(model, str) or not isinstance(thinking, str):
+        raise BridgeError(f"batch task {task_id!r} has invalid provider, model, or thinking")
+    try:
+        _validate_identity(provider, model, thinking)
+    except BridgeError as exc:
+        raise BridgeError(f"batch task {task_id!r} has invalid effort or timeout") from exc
     timeout = value.get("timeout", DEFAULT_TIMEOUT_SECONDS)
-    if effort != EXECUTION_EFFORT:
-        raise BridgeError(f"batch task {task_id!r} has invalid effort or timeout")
     try:
         timeout = _positive_timeout(timeout, label=f"batch task {task_id!r} timeout")
     except BridgeError as exc:
         raise BridgeError(f"batch task {task_id!r} has invalid effort or timeout") from exc
+    if not isinstance(value["session_dir"], str) or not value["session_dir"].strip():
+        raise BridgeError(f"batch task {task_id!r} requires session_dir")
     return argparse.Namespace(
         cwd=value["cwd"],
         prompt=value["prompt"],
         prompt_file=None,
         session=None,
-        effort=effort,
+        provider=provider,
+        model=model,
+        effort=thinking,
+        session_dir=value["session_dir"],
         mode="accept-edits",
         timeout=timeout,
         task_id=task_id,
@@ -877,32 +1142,35 @@ def _batch(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _doctor(_args: argparse.Namespace) -> dict[str, Any]:
-    binary = _grok_binary()
+    binary = _pi_binary()
     version = subprocess.run(
         [binary, "--version"], capture_output=True, text=True, timeout=30, check=False
     )
-    models = subprocess.run(
-        [binary, "models"], capture_output=True, text=True, timeout=60, check=False
-    )
-    if version.returncode != 0 or models.returncode != 0:
-        raise BridgeError("grok version/model discovery failed")
-    if f"{REQUESTED_MODEL} (default)" not in models.stdout:
-        raise BridgeError(f"required model is unavailable: {REQUESTED_MODEL}")
+    if version.returncode != 0:
+        raise BridgeError("pi version discovery failed")
     return {
         "schema": SCHEMA,
         "status": "DISCOVERED",
-        "provider": "grok-build-cli",
+        "provider": "pi",
         "cli_binary": binary,
         "cli_version": version.stdout.strip(),
-        "requested_model": REQUESTED_MODEL,
-        "actual_model": ACTUAL_MODEL,
         "execution_probe_required": True,
+        "grokcli_dispatched": False,
     }
 
 
 def _add_execution_arguments(parser: argparse.ArgumentParser, *, resume: bool) -> None:
     parser.add_argument("--cwd", default=os.getcwd())
-    parser.add_argument("--effort", choices=(EXECUTION_EFFORT,), default=EXECUTION_EFFORT)
+    parser.add_argument("--provider", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--thinking",
+        "--effort",
+        dest="effort",
+        required=True,
+        choices=tuple(sorted(THINKING_LEVELS)),
+    )
+    parser.add_argument("--session-dir", required=True)
     parser.add_argument("--mode", choices=("accept-edits",), default="accept-edits")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     prompt = parser.add_mutually_exclusive_group()
