@@ -14,11 +14,13 @@ REQUIRED_FILES = {
     "WORKFLOW.md",
     "package/global-portable.md",
     "package/local.example.toml",
+    "package/pi/v23-enforce-tools.ts",
     "package/v23-primary.config.toml.in",
     "package/agents/v23-executor.toml.in",
     "package/agents/v23-reviewer.toml.in",
     ".agents/skills/engineering-delivery/SKILL.md",
     ".agents/skills/grok-execution/SKILL.md",
+    ".agents/skills/codegraph-routing/SKILL.md",
     "scripts/grok_execution.py",
     "scripts/bounded_search.py",
     "scripts/executor_routing.py",
@@ -295,6 +297,57 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn("external block", github)
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
         self.assertIn("stalled progress", workflow)
+
+    def test_pi_enforcement_wiring_uses_the_official_extension_api(self) -> None:
+        extension = (ROOT / "package/pi/v23-enforce-tools.ts").read_text(encoding="utf-8")
+        bridge = (ROOT / "scripts/grok_execution.py").read_text(encoding="utf-8")
+        self.assertIn('pi.on("tool_call"', extension)
+        self.assertIn("isToolCallEventType", extension)
+        self.assertIn("event.input.command", extension)
+        self.assertIn('pi.on("tool_result"', extension)
+        self.assertIn("rtk", extension)
+        self.assertNotIn("Stop", extension)
+        self.assertIn("--no-extensions", bridge)
+        self.assertIn('"-e"', bridge)
+        self.assertIn("--v23-rtk-log", bridge)
+        self.assertIn("--task-kind", bridge)
+        self.assertIn("--codegraph-refresh", bridge)
+
+    def test_tool_obligations_are_consistent_on_active_surfaces(self) -> None:
+        def flat(path: Path) -> str:
+            return " ".join(path.read_text(encoding="utf-8").split())
+
+        agents = flat(ROOT / "AGENTS.md")
+        portable = flat(ROOT / "package/global-portable.md")
+        docs = flat(ROOT / "docs/tool-routing.md")
+        reference = flat(ROOT / ".agents/skills/engineering-delivery/references/tool-routing.md")
+        pi_skill = flat(ROOT / ".agents/skills/grok-execution/SKILL.md")
+        bridge = flat(ROOT / "scripts/grok_execution.py")
+        routing = flat(ROOT / "scripts/executor_routing.py")
+        for text in (docs, reference, pi_skill):
+            self.assertIn("BEFORE code exploration", text)
+        self.assertIn("before code exploration", agents.casefold())
+        self.assertIn("BEFORE code exploration", bridge)
+        self.assertIn("BEFORE code exploration", routing)
+        for text in (docs, reference, bridge):
+            self.assertIn("not proof of freshness", text)
+        for text in (agents, docs, reference, pi_skill, bridge, routing):
+            lowered = text.casefold()
+            self.assertIn("structural query", lowered)
+            self.assertIn("read-only", lowered)
+            self.assertIn("baseline", lowered)
+        for text in (agents, docs, reference, pi_skill, bridge, routing):
+            self.assertIn("finite verified", text)
+        self.assertIn("explicit raw exceptions", bridge)
+        self.assertIn("explicit raw exceptions", routing)
+        self.assertIn("preserves exit status and diagnostics", bridge)
+        self.assertIn("preserves exit status and diagnostics", routing)
+        self.assertIn("代码调查或修改", portable)
+        self.assertIn("结构化查询", portable)
+        self.assertIn("只读不刷新", portable)
+        self.assertIn("probe-updates", portable)
+        self.assertIn("probe-updates", docs)
+        self.assertIn("probe-updates", reference)
 
     def test_portable_instructions_stay_thin(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")

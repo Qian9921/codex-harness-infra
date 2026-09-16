@@ -53,16 +53,27 @@ Recursive content search defaults to the installed Harness helper
 exact repository, module, or explicit file set. 15s timeout; after timeout or
 incomplete, narrow and retry; never treat incomplete as no-match. Known
 individual-file reads may stay direct. Do not bypass with grep or Python.
-Known file/exact symbol/text uses that helper or a direct read. Cross-file
-callers, dependencies, or impact: focused CodeGraph when a usable owner index
-exists; read-only work may use a fresh index and must check current content.
-Unknown implementation after insufficient keywords: focused Semble in a known
-repo/module. Compact supported pytest summaries: optional RTK; raw commands for
-diffs, porcelain/JSON, and exact diagnostics. tgrep is experimental, not a
+Known file/exact symbol/text uses that helper or a direct read. Tool
+obligations have explicit triggers: code investigation or change checks the
+owner-repo CodeGraph index before code exploration and cross-checks current
+source; cross-file callers, dependencies, or impact uses a focused structural
+query, not only a file listing; a missing or stale index is refreshed only in
+an authorized writable owner repo. A reported zero pending count is not proof
+of freshness: writable work syncs before relying on the index, while read-only
+work treats freshness as unknown, traces source, and states the limit.
+Unknown implementation after
+insufficient keywords: focused, optional Semble in a known repo/module. RTK
+routes only a finite verified supported set (compact pytest summaries), and
+the explicitly loaded owned Pi extension routes plain pytest through it by
+default; exact JSON/porcelain/diffs and necessary raw diagnostics stay raw and
+preserve exit status, compound shell syntax is never silently rewritten, and
+an absent rtk falls back to the explicit raw command. Tool absence, real
+failure, or a read-only missing index: explicit
+short baseline fallback, never "not needed". tgrep is experimental, not a
 default backend, and is not installed by this Harness (a user may already have
 it). Unknown or version-different commands: inspect `--help`, then baseline.
-Optional tools are invoked only for a concrete need; missing or failed tools
-fall back to baseline. Detail:
+Optional tools are invoked only on the listed triggers; absent or failed tools
+use the explicit baseline fallback. Detail:
 `.agents/skills/engineering-delivery/references/tool-routing.md`.
 
 ## Code review rules
@@ -73,7 +84,8 @@ fall back to baseline. Detail:
 3. Do not install daemons, background indexes, or extra hooks. The sole V23
    UserPromptSubmit hook injects installed instructions and local integrity
    checks. Optional tools and daemon probes are explicit or task-relevant; a
-   tool failure must not block unrelated work.
+   tool failure must not block unrelated work. Explicit maintenance may run
+   bounded version/update checks that never auto-upgrade.
 
 ## Delegation
 

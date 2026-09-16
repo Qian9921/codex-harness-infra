@@ -73,6 +73,15 @@ class InstallerTests(unittest.TestCase):
         (grok_skill / "references/grok-process-lifecycle.md").write_text(
             "# lifecycle\n", encoding="utf-8"
         )
+        codegraph_skill = repo / ".agents/skills/codegraph-routing"
+        codegraph_skill.mkdir(parents=True)
+        (codegraph_skill / "SKILL.md").write_text(
+            "---\nname: codegraph-routing\ndescription: Test.\n---\n", encoding="utf-8"
+        )
+        (repo / "package/pi").mkdir(parents=True)
+        (repo / "package/pi/v23-enforce-tools.ts").write_text(
+            "export default function () {}\n", encoding="utf-8"
+        )
         local = root / "local.toml"
         local.write_text(
             """
@@ -598,6 +607,8 @@ instruction = "Local-only opening."
             self.assertTrue((codex_home / "agents/v23-reviewer.toml").is_file())
             self.assertTrue((codex_home / "skills/engineering-delivery/SKILL.md").is_file())
             self.assertTrue((codex_home / "skills/grok-execution/SKILL.md").is_file())
+            self.assertTrue((codex_home / "skills/codegraph-routing/SKILL.md").is_file())
+            self.assertTrue((codex_home / "harness/v23/pi/v23-enforce-tools.ts").is_file())
             self.assertTrue((codex_home / "harness/v23/task_bootstrap.py").is_file())
             self.assertTrue((codex_home / "bin/grok-execution.py").is_file())
             self.assertTrue((codex_home / "bin/bounded-search.py").is_file())
@@ -641,6 +652,8 @@ instruction = "Local-only opening."
             self.assertFalse((codex_home / "agents/v23-executor.toml").exists())
             self.assertFalse((codex_home / "skills/engineering-delivery").exists())
             self.assertFalse((codex_home / "skills/grok-execution").exists())
+            self.assertFalse((codex_home / "skills/codegraph-routing").exists())
+            self.assertFalse((codex_home / "harness/v23/pi/v23-enforce-tools.ts").exists())
             self.assertFalse((codex_home / "harness/v23/task_bootstrap.py").exists())
             self.assertFalse((codex_home / "bin/grok-execution.py").exists())
             self.assertFalse((codex_home / "bin/bounded-search.py").exists())
@@ -650,6 +663,29 @@ instruction = "Local-only opening."
             self.assertFalse(
                 (codex_home / "skills/grok-execution/references/grok-process-lifecycle.md").exists()
             )
+
+    def test_install_preserves_private_codegraph_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo, local = self.make_repo(root)
+            codex_home = root / "codex"
+            private = codex_home / "skills/codegraph/SKILL.md"
+            private.parent.mkdir(parents=True)
+            private.write_text(
+                "---\nname: codegraph\ndescription: user private.\n---\n", encoding="utf-8"
+            )
+            install(repo, codex_home, local, root / "state")
+            self.assertEqual(
+                private.read_text(encoding="utf-8"),
+                "---\nname: codegraph\ndescription: user private.\n---\n",
+            )
+            self.assertTrue((codex_home / "skills/codegraph-routing/SKILL.md").is_file())
+            uninstall(codex_home, root / "state")
+            self.assertEqual(
+                private.read_text(encoding="utf-8"),
+                "---\nname: codegraph\ndescription: user private.\n---\n",
+            )
+            self.assertFalse((codex_home / "skills/codegraph-routing").exists())
 
     def test_install_preserves_unowned_hook_trust_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1315,6 +1351,59 @@ availability = "configured"
                 install(repo, codex_home, local, root / "state")
             self.assertEqual(sidecar.read_text(encoding="utf-8"), "personal runtime\n")
 
+    def test_install_cli_reports_bounded_tool_check_without_upgrading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[tools]
+codegraph = "not-a-real-codegraph-binary"
+semble = "not-a-real-semble-binary"
+rtk = "not-a-real-rtk-binary"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/install.py"),
+                    "install",
+                    "--repo-root",
+                    str(ROOT),
+                    "--codex-home",
+                    str(root / "codex"),
+                    "--local-config",
+                    str(local),
+                    "--state-dir",
+                    str(root / "state"),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("Bounded install/migration tool check (never upgrades)", completed.stdout)
+            self.assertIn(
+                "CodeGraph version: failed: configured executable unavailable: "
+                "not-a-real-codegraph-binary; version not verified",
+                completed.stdout,
+            )
+            self.assertIn(
+                "Semble version: failed: unknown: configured executable unavailable: "
+                "not-a-real-semble-binary; version not verified",
+                completed.stdout,
+            )
+            self.assertNotIn("codegraph upgrade", completed.stdout)
+
     def test_installed_native_roles_and_bound_prompt_carry_reuse_clause(self) -> None:
         marker = "Name or similarity is not fitness"
         configs = {
@@ -1435,7 +1524,12 @@ target = "native"
                 self.assertIn(marker, portable)
                 tool_marker = "Optional tools are selected only for a concrete need"
                 self.assertIn(tool_marker, installed)
+                self.assertIn("BEFORE code exploration", installed)
+                self.assertIn("finite verified supported set", installed)
                 self.assertIn("TOOL_SELECTION_GUIDANCE", grok_bridge)
+                flat_bridge = " ".join(grok_bridge.split())
+                self.assertIn("BEFORE code exploration", flat_bridge)
+                self.assertIn("finite verified supported set", flat_bridge)
                 self.assertIn("not installed by this Harness", grok_bridge)
                 self.assertIn("command -v", grok_bridge)
                 self.assertIn('f"{TOOL_SELECTION_GUIDANCE}', grok_bridge)
@@ -1443,12 +1537,16 @@ target = "native"
                 self.assertIn("本 Harness 不安装它", portable)
                 self.assertIn("focused CodeGraph", portable)
                 self.assertIn("可选工具仅在有具体需要时调用", portable)
+                self.assertIn("probe-updates", portable)
                 routing_text = (
                     codex_home / "skills/engineering-delivery/references/tool-routing.md"
                 ).read_text(encoding="utf-8")
                 self.assertIn("codegraph callers", routing_text)
                 self.assertIn("status --json", routing_text)
+                self.assertIn("BEFORE code exploration", routing_text)
+                self.assertIn("finite verified", routing_text)
                 self.assertIn("rtk pytest", routing_text)
+                self.assertIn("probe-updates", routing_text)
                 self.assertIn("command -v", routing_text)
                 self.assertNotIn("status -p", routing_text)
                 self.assertFalse((codex_home / "skills/codegraph/SKILL.md").exists())

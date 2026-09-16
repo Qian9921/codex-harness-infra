@@ -1,10 +1,12 @@
 """Report whether a V23 local installation is usable and run bounded tool probes.
 
 Doctor summarizes the live installation and can probe CodeGraph, Semble, and
-RTK on request; it does not re-enter the full UserPromptSubmit hook. Live
-runtime state for new tasks is collected separately from ``install.json`` and
-daemon probes. Memory of earlier tasks is historical only. Tool probe failure
-does not rewrite the prompt hook.
+RTK on request; it does not re-enter the full UserPromptSubmit hook. An
+explicit ``--probe-updates`` check reports bounded tool versions and available
+updates for install or maintenance, reports offline/unsupported checks
+honestly, and never upgrades. Live runtime state for new tasks is collected
+separately from ``install.json`` and daemon probes. Memory of earlier tasks is
+historical only. Tool probe failure does not rewrite the prompt hook.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ try:
         ToolResult,
         collect_live_runtime_state,
         local_installation_checks,
+        probe_tool_versions,
         probe_tools,
     )
 except ModuleNotFoundError:  # Support the documented `python scripts/doctor.py` entrypoint.
@@ -40,12 +43,16 @@ except ModuleNotFoundError:  # Support the documented `python scripts/doctor.py`
         ToolResult,
         collect_live_runtime_state,
         local_installation_checks,
+        probe_tool_versions,
         probe_tools,
     )
 
 
-def _result(name: str, ok: bool, detail: str) -> dict[str, object]:
-    return {"name": name, "ok": ok, "detail": detail}
+def _result(name: str, ok: bool, detail: str, *, status: str | None = None) -> dict[str, object]:
+    record: dict[str, object] = {"name": name, "ok": ok, "detail": detail}
+    if status is not None:
+        record["status"] = status
+    return record
 
 
 def _github_login(config_dir: str) -> tuple[bool, str]:
@@ -94,6 +101,7 @@ def _agent_chain(project: Path) -> list[str]:
 
 
 ToolProbe = Callable[[Path, str, dict[str, object]], list[ToolResult]]
+UpdateProbe = Callable[[dict[str, object]], list[ToolResult]]
 
 
 def doctor(
@@ -104,6 +112,8 @@ def doctor(
     tool_probe: ToolProbe = probe_tools,
     probe_required_tools: bool = False,
     probe_daemons: bool = False,
+    update_probe: UpdateProbe = probe_tool_versions,
+    probe_updates: bool = False,
 ) -> dict:
     checks: list[dict[str, object]] = []
     codex_home = codex_home.resolve()
@@ -173,6 +183,21 @@ def doctor(
             )
         for result in tool_results:
             checks.append(_result(f"tool_{result.name.casefold()}", result.ok, result.detail))
+    configured_tools = [name for name in ("codegraph", "semble", "rtk") if tools.get(name)]
+    if local_ok is not None and local_ok[1] and probe_updates and configured_tools:
+        try:
+            version_results = update_probe(tools)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            version_results = [ToolResult("tool versions", False, f"version probe failed: {error}")]
+        for result in version_results:
+            checks.append(
+                _result(
+                    f"tool_{result.name.casefold().replace(' ', '_')}",
+                    result.ok,
+                    result.detail,
+                    status=getattr(result, "status", "") or None,
+                )
+            )
     if check_github:
         if not local:
             try:
@@ -262,7 +287,9 @@ def doctor(
                         )
                     )
     return {
-        "ok": all(bool(check["ok"]) for check in checks),
+        # Optional tools that are genuinely absent are reported as skipped and
+        # excluded from readiness; they are not success claims and not failures.
+        "ok": all(bool(check["ok"]) for check in checks if check.get("status") != "skipped"),
         "active_global_instruction": str(effective_global_instruction(codex_home)),
         "project_instruction_candidates": _agent_chain(project),
         "primary_profile_start": "codex --profile v23-primary",
@@ -291,6 +318,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         help="run CodeGraph/Semble/RTK probes when those tools are configured",
     )
     parser.add_argument(
+        "--probe-updates",
+        action="store_true",
+        help="bounded tool version/update check for install or maintenance; never upgrades",
+    )
+    parser.add_argument(
         "--probe-daemons",
         action="store_true",
         help="run expensive Codex CLI/app-server daemon probes",
@@ -303,6 +335,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         not args.skip_github,
         probe_required_tools=args.probe_tools,
         probe_daemons=args.probe_daemons,
+        probe_updates=args.probe_updates,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result["ok"] else 1

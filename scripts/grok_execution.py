@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import Sequence
 from typing import Any
 
@@ -24,6 +25,12 @@ THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh",
 SUCCESS_STOP_REASONS = frozenset({"stop"})
 FAILED_STOP_REASONS = frozenset({"error", "aborted", "length", "pending"})
 PI_TOOLS = "read,bash,edit,write"
+TASK_KINDS = frozenset({"general", "code", "code-cross-file"})
+# Owned Pi extension loaded explicitly together with ``--no-extensions``.
+PI_ENFORCEMENT_EXTENSION_RELATIVE = "harness/v23/pi/v23-enforce-tools.ts"
+# Installed local config, then the documented install/doctor default.
+LOCAL_CONFIG_RELATIVE = "harness/v23/local.toml"
+DEFAULT_LOCAL_CONFIG_RELATIVE = ".config/codex-harness/local.toml"
 TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
@@ -401,28 +408,50 @@ REUSE_BEFORE_DECISION = (
 )
 
 TOOL_SELECTION_GUIDANCE = (
-    "Known file, exact symbol, or exact text: bounded-search or a direct read. "
-    "Cross-file callers, dependencies, or impact: a focused CodeGraph query when "
-    "a usable owner index exists; read-only work may use a fresh usable index, "
-    "and must still check relevant current content rather than status alone. "
-    "Refresh a missing or stale index only under an authorized write executor; "
-    "otherwise trace source with bounded-search and state the limit. Unknown "
-    "implementation after insufficient bounded keywords: focused Semble in a "
-    "known repo or module, then inspect top files; query echo is not an answer. "
-    "Prefer available RTK for supported compact test summaries when full "
-    "diagnostics are unnecessary; use raw commands for unified diffs, "
-    "porcelain/JSON, and exact diagnostics. tgrep is "
-    "experimental, not a default backend, and is not installed by this Harness; "
-    "a user may already have it independently. If a command or flag is unknown "
-    "or the installed version differs, inspect that binary's --help and fall "
-    "back to baseline. Resolve an optional tool only from its configured path "
-    "or PATH via `command -v`; if unavailable, use baseline. Do not scan home, "
-    "tmp, or workspace trees, or inspect internal tool databases, merely to "
-    "discover setup. After sufficient evidence, do not probe again; availability "
-    "checking is not required on every task. Optional tools are selected only "
-    "for a concrete need, actually invoked when they fit, and missing or failed "
-    "tools fall back to baseline. This is prompt guidance, not a classifier or "
-    "gate."
+    "Tool obligations use explicit triggers; this is never a batch probe of "
+    "every task. Code investigation or change: check the owner repository "
+    "CodeGraph index (`codegraph status --json <repo>`) BEFORE code exploration, "
+    "and cross-check the cited current source. Cross-file "
+    "callers, dependencies, or impact: run a focused structural query "
+    "(`codegraph query|callers|callees|impact -p <repo> --json <symbol>`); a "
+    "file listing or lexical match cannot waive the structural query. Missing "
+    "or stale index (not initialized, any nonzero pending count, "
+    "reindexRecommended, or incomplete state): create or refresh it "
+    "(`codegraph init`/`sync`) only in an authorized writable owner repository, "
+    "judging freshness from the current tree rather than commit metadata alone. "
+    "A status that reports zero pending changes is not proof of freshness: "
+    "refresh with `sync` in an authorized writable owner repository before "
+    "relying on the index; read-only work treats freshness as unknown, does "
+    "not refresh, traces with bounded-search, cross-checks current source, "
+    "and states the limit. Known file, exact symbol, or "
+    "exact text: bounded-search or a direct read. Unknown implementation after "
+    "insufficient bounded keywords: focused Semble in a known repo or module, "
+    "then inspect the cited files; Semble stays optional and query echo is not "
+    "an answer. RTK routes only the finite verified supported set (for example "
+    "`rtk pytest <args>` compact test summaries). The owned Pi extension routes "
+    "bare `pytest` through `rtk pytest` by default; `python -m pytest`, "
+    "`pytest3`, and explicit interpreter or pytest paths stay raw because that "
+    "route does not prove it preserves the selected executable. "
+    "exact JSON, porcelain, unified diffs, and necessary raw diagnostics are "
+    "explicit raw exceptions, unsupported compound shell syntax is never "
+    "silently rewritten, an absent or failed rtk falls back to the explicit "
+    "raw command, and a routed failure preserves exit status and diagnostics. "
+    "Tool absent, "
+    "real failure, or a read-only missing index: use the explicit short "
+    "baseline fallback (bounded-search/direct reads or raw commands) and say "
+    "so; never dismiss it as not needed. tgrep is experimental, not a default "
+    "backend, and is not installed by this Harness; a user may already have it "
+    "independently. Unknown or version-different commands: inspect that "
+    "binary's --help, then fall back to baseline. Resolve an optional tool "
+    "from its configured `[tools]` path, the V23_* override, or PATH via "
+    "`command -v`; if unavailable, use baseline. Do not scan home, tmp, or "
+    "workspace trees, or inspect "
+    "internal tool databases, merely to discover setup. After sufficient "
+    "evidence, do not probe again; availability checking is not required on "
+    "every task. Optional tools are selected only for a concrete need, "
+    "actually invoked when they fit, and missing or failed tools fall back to "
+    "baseline. This is an obligation for the listed triggers, not a classifier "
+    "or gate."
 )
 
 _AUTHORIZED_WORK = (
@@ -437,14 +466,158 @@ _AUTHORIZED_WORK = (
 )
 
 
+def _enforcement_extension() -> pathlib.Path:
+    """Resolve the owned Pi tool-routing extension, or fail explicitly."""
+    override = os.environ.get("V23_PI_EXTENSION")
+    if override and override.strip():
+        candidate = pathlib.Path(override).expanduser()
+        if not candidate.is_file() or candidate.is_symlink():
+            raise BridgeError(f"V23_PI_EXTENSION is not the owned extension file: {override}")
+        return candidate.resolve()
+    candidates = [
+        _codex_home() / PI_ENFORCEMENT_EXTENSION_RELATIVE,
+        _module_path().parent.parent / "package/pi/v23-enforce-tools.ts",
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate.resolve()
+    raise BridgeError(
+        "V23 Pi enforcement extension is missing; install the harness or set "
+        "V23_PI_EXTENSION to the owned extension file"
+    )
+
+
+def _local_config_path(args: argparse.Namespace) -> pathlib.Path | None:
+    """Resolve the local config: explicit flag, installed candidate, then default."""
+    override = getattr(args, "local_config", None)
+    if isinstance(override, (str, pathlib.Path)) and str(override).strip():
+        return pathlib.Path(override).expanduser()
+    candidates = (
+        _codex_home() / LOCAL_CONFIG_RELATIVE,
+        pathlib.Path.home() / DEFAULT_LOCAL_CONFIG_RELATIVE,
+    )
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        return candidate.resolve()
+    return None
+
+
+def _configured_tools(args: argparse.Namespace) -> dict[str, str]:
+    """Read only ``[tools].codegraph``/``[tools].rtk``; never echo the file."""
+    path = _local_config_path(args)
+    if path is None:
+        return {}
+    try:
+        loaded = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    tools = loaded.get("tools") if isinstance(loaded, dict) else None
+    if not isinstance(tools, dict):
+        return {}
+    configured: dict[str, str] = {}
+    for name in ("codegraph", "rtk"):
+        value = tools.get(name)
+        if isinstance(value, str) and value.strip():
+            configured[name] = value.strip()
+    return configured
+
+
+def _tools_child_env(tools: dict[str, str]) -> dict[str, str] | None:
+    """Propagate the RTK path into the Pi child environment.
+
+    A nonempty ``V23_RTK_BIN`` override wins over the configured ``[tools].rtk``
+    path, matching the CodeGraph resolution order.
+    """
+    rtk = tools.get("rtk")
+    if not rtk:
+        return None
+    override = os.environ.get("V23_RTK_BIN")
+    if isinstance(override, str) and override.strip():
+        return {**os.environ, "V23_RTK_BIN": override}
+    return {**os.environ, "V23_RTK_BIN": rtk}
+
+
+def _task_bootstrap_helper() -> Any:
+    """Load the shared preflight helper in repo and installed layouts."""
+    try:
+        from scripts.task_bootstrap import preflight_codegraph
+
+        return preflight_codegraph
+    except ModuleNotFoundError:
+        harness = _codex_home() / "harness/v23"
+        if harness.is_dir() and str(harness) not in sys.path:
+            sys.path.insert(0, str(harness))
+        try:
+            from task_bootstrap import preflight_codegraph
+
+            return preflight_codegraph
+        except ModuleNotFoundError as exc:  # pragma: no cover - broken install
+            raise BridgeError(
+                "CodeGraph preflight helper is missing; reinstall the harness"
+            ) from exc
+
+
+def _validate_codegraph_declaration(
+    task_kind: str,
+    refresh: bool,
+    symbol: str | None,
+    query: str,
+) -> None:
+    """Validate the explicit task declaration; never classify the prompt."""
+    if task_kind not in TASK_KINDS:
+        raise BridgeError(f"unknown task kind {task_kind!r}")
+    focused = bool((symbol or "").strip() or (query or "").strip())
+    if task_kind == "general":
+        if refresh or focused:
+            raise BridgeError("CodeGraph options require --task-kind code or code-cross-file")
+        return
+    if task_kind == "code-cross-file" and not focused:
+        raise BridgeError(
+            "--task-kind code-cross-file requires --codegraph-symbol or --codegraph-query"
+        )
+
+
+def _codegraph_preflight(
+    cwd: pathlib.Path,
+    *,
+    writable: bool,
+    symbol: str | None,
+    query: str,
+    codegraph: str | None = None,
+) -> Any:
+    helper = _task_bootstrap_helper()
+    return helper(
+        cwd,
+        writable=writable,
+        symbol=symbol,
+        query=query,
+        codegraph=codegraph,
+    )
+
+
+def _preflight_prompt(task_kind: str, result: Any) -> str:
+    if result is None:
+        return ""
+    state = "ok" if result.ok else "not ok; use the explicit short baseline fallback and say so"
+    return (
+        f"Declared task kind: {task_kind}. The adapter already ran the CodeGraph "
+        f"preflight before this session: {state}. Evidence: {result.detail}. Do not "
+        "repeat the same index status check; cross-check the cited current source "
+        "and say when freshness was reported unknown."
+    )
+
+
 def _bound_prompt(
     prompt: str,
     cwd: pathlib.Path,
     *,
     task_id: str,
     owned_paths: Sequence[str],
+    preflight: str = "",
 ) -> str:
     helper = _bounded_search_helper()
+    declaration = f"{preflight}\n" if preflight else ""
     return (
         "You are the selected external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
@@ -459,7 +632,8 @@ def _bound_prompt(
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "
         "scope and retry; never treat incomplete as no-match. Known individual-file reads "
         "may stay direct. Do not bypass with grep or Python recursive scans.\n"
-        f"{TOOL_SELECTION_GUIDANCE}\n\n"
+        f"{TOOL_SELECTION_GUIDANCE}\n"
+        f"{declaration}\n"
         "TASK\n"
         f"{prompt}"
     )
@@ -538,6 +712,8 @@ def _command(
     model: str,
     thinking: str,
     task_id: str,
+    extension: pathlib.Path,
+    rtk_log: pathlib.Path,
 ) -> list[str]:
     _validate_identity(provider, model, thinking)
     command = [
@@ -558,6 +734,10 @@ def _command(
         "--no-skills",
         "--no-prompt-templates",
         "--no-approve",
+        "-e",
+        str(extension),
+        "--v23-rtk-log",
+        str(rtk_log),
         "--tools",
         PI_TOOLS,
         f"@{prompt_file}",
@@ -701,13 +881,16 @@ class _SpawnCleanupToken:
             pass
 
 
-def _spawn_grok(command: Sequence[str], cwd: pathlib.Path) -> subprocess.Popen[str]:
+def _spawn_grok(
+    command: Sequence[str], cwd: pathlib.Path, *, env: dict[str, str] | None = None
+) -> subprocess.Popen[str]:
     proc = subprocess.Popen(
         _child_launcher_argv(command),
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
         start_new_session=True,
     )
     proc._v23_cleanup_token = _SpawnCleanupToken(proc)
@@ -849,6 +1032,7 @@ def _supervised_run(
     cwd: pathlib.Path,
     *,
     timeout: int | None,
+    env: dict[str, str] | None = None,
     spawn: Any = _spawn_grok,
     is_alive: Any = default_is_alive,
     is_zombie: Any = default_is_zombie,
@@ -865,7 +1049,7 @@ def _supervised_run(
         with _REGISTRY_LOCK:
             if _TERMINATING:
                 raise BridgeError("process is terminating")
-            proc = spawn(command, cwd)
+            proc = spawn(command, cwd) if env is None else spawn(command, cwd, env=env)
             if not hasattr(proc, "_v23_pgid") or getattr(proc, "_v23_pgid", None) is None:
                 _record_dedicated_pgid(proc)
             if not _owns_dedicated_group(proc):
@@ -972,11 +1156,29 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         thinking=thinking,
         session_dir=session_dir,
     )
+    extension = _enforcement_extension()
+    rtk_log = session_dir / f"{task_id}.rtk.jsonl"
+    tools = _configured_tools(args)
+    task_kind = str(getattr(args, "task_kind", "general") or "general")
+    codegraph_refresh = bool(getattr(args, "codegraph_refresh", False))
+    codegraph_symbol = getattr(args, "codegraph_symbol", None)
+    codegraph_query = str(getattr(args, "codegraph_query", "") or "")
+    _validate_codegraph_declaration(task_kind, codegraph_refresh, codegraph_symbol, codegraph_query)
+    preflight_result: Any = None
+    if task_kind != "general":
+        preflight_result = _codegraph_preflight(
+            cwd,
+            writable=codegraph_refresh,
+            symbol=codegraph_symbol or None,
+            query=codegraph_query,
+            codegraph=tools.get("codegraph"),
+        )
     bound = _bound_prompt(
         _prompt(args),
         cwd,
         task_id=task_id,
         owned_paths=owned_paths,
+        preflight=_preflight_prompt(task_kind, preflight_result),
     )
     prompt_path: pathlib.Path | None = None
     started = time.monotonic()
@@ -991,11 +1193,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             model=model,
             thinking=thinking,
             task_id=task_id,
+            extension=extension,
+            rtk_log=rtk_log,
         )
         completed = _supervised_run(
             command,
             cwd,
             timeout=_positive_timeout(getattr(args, "timeout", None)),
+            env=_tools_child_env(tools),
         )
     finally:
         if prompt_path is not None:
@@ -1058,6 +1263,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "conversation_id": parsed["session_id"],
         "session_dir": str(session_dir),
         "events_path": str(events_path),
+        "enforcement_extension": str(extension),
+        "rtk_log": str(rtk_log),
+        "task_kind": task_kind,
+        "codegraph_preflight": (
+            None
+            if preflight_result is None
+            else {"ok": bool(preflight_result.ok), "detail": str(preflight_result.detail)}
+        ),
         "continued": args.session is not None,
         "wall_seconds": round(wall_seconds, 6),
         "usage": parsed["usage"],
@@ -1081,11 +1294,19 @@ def _batch_task(value: Any) -> argparse.Namespace:
         "thinking",
         "session_dir",
     }
-    allowed = required | {"effort", "timeout"}
+    allowed = required | {
+        "effort",
+        "timeout",
+        "task_kind",
+        "codegraph_refresh",
+        "codegraph_symbol",
+        "codegraph_query",
+    }
     if set(value) - allowed or not required.issubset(value):
         raise BridgeError(
             "batch task fields must be id, cwd, prompt, owned_paths, provider, model, "
-            "thinking, session_dir, effort, timeout"
+            "thinking, session_dir, effort, timeout, and optional task_kind, "
+            "codegraph_refresh, codegraph_symbol, codegraph_query"
         )
     task_id = value["id"]
     if not isinstance(task_id, str) or not task_id.strip():
@@ -1127,6 +1348,10 @@ def _batch_task(value: Any) -> argparse.Namespace:
         timeout=timeout,
         task_id=task_id,
         owned_path=value["owned_paths"],
+        task_kind=value.get("task_kind", "general"),
+        codegraph_refresh=bool(value.get("codegraph_refresh", False)),
+        codegraph_symbol=value.get("codegraph_symbol"),
+        codegraph_query=value.get("codegraph_query", ""),
     )
 
 
@@ -1215,6 +1440,16 @@ def _doctor(_args: argparse.Namespace) -> dict[str, Any]:
 
 def _add_execution_arguments(parser: argparse.ArgumentParser, *, resume: bool) -> None:
     parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument(
+        "--local-config",
+        type=pathlib.Path,
+        default=None,
+        help=(
+            "local TOML with optional [tools].codegraph/[tools].rtk paths; "
+            "defaults to ${CODEX_HOME}/harness/v23/local.toml, then "
+            "~/.config/codex-harness/local.toml"
+        ),
+    )
     parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument(
@@ -1232,6 +1467,22 @@ def _add_execution_arguments(parser: argparse.ArgumentParser, *, resume: bool) -
     prompt.add_argument("--prompt-file")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--owned-path", action="append", required=True)
+    parser.add_argument(
+        "--task-kind",
+        choices=tuple(sorted(TASK_KINDS)),
+        default="general",
+        help=(
+            "explicit task declaration (default general, no preflight); code kinds run "
+            "the owner CodeGraph preflight before Pi starts"
+        ),
+    )
+    parser.add_argument(
+        "--codegraph-refresh",
+        action="store_true",
+        help="allow the declared code preflight to init/sync the owner index",
+    )
+    parser.add_argument("--codegraph-symbol", help="focused symbol for a callers preflight")
+    parser.add_argument("--codegraph-query", help="focused query for a declared code preflight")
     if resume:
         parser.add_argument("--session", required=True)
         parser.add_argument("--receipt", required=True)

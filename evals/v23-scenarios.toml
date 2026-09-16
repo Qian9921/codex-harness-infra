@@ -1,5 +1,5 @@
 version = 1
-count = 18
+count = 21
 
 [[scenario]]
 id = "discuss-read-only"
@@ -126,3 +126,24 @@ dimension = "installation"
 prompt = "Install and remove V23 beside personal Codex configuration."
 expected = "Install and uninstall preserve personal content, use one prompt hook, and add no Stop hook."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_install_uninstall_preserves_local_state"
+
+[[scenario]]
+id = "codegraph-index-before-query"
+dimension = "tools"
+prompt = "Who calls assemble?"
+expected = "The owner index is checked before any structural query; a callers query replaces a file listing."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_index_check_precedes_structural_query"
+
+[[scenario]]
+id = "codegraph-stale-or-read-only"
+dimension = "tools"
+prompt = "Change the assembly path, or investigate read-only."
+expected = "A writable owner index always syncs because a zero pending count is not proof of freshness; a read-only index never writes and states the unknown-freshness limit."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_stale_index_refreshes_or_states_read_only_limit"
+
+[[scenario]]
+id = "rtk-finite-verified-routes"
+dimension = "tools"
+prompt = "Summarize the test run."
+expected = "Only the finite verified RTK route set is routed, and a routed failure preserves diagnostics."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_rtk_routes_finite_verified_set_and_preserves_failure"

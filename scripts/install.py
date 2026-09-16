@@ -40,7 +40,7 @@ try:
         parse_policy,
         render_executor_agent,
     )
-    from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS
+    from scripts.task_bootstrap import HOOK_TIMEOUT_SECONDS, REQUIRED_TOOLS, probe_tool_versions
 except ModuleNotFoundError:  # Support the documented direct script entrypoint.
     from delivery_policy import DeliveryError, parse_delivery  # type: ignore[no-redef]
     from executor_routing import (  # type: ignore[no-redef]
@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # Support the documented direct script entrypoint.
         parse_policy,
         render_executor_agent,
     )
-    from task_bootstrap import HOOK_TIMEOUT_SECONDS
+    from task_bootstrap import HOOK_TIMEOUT_SECONDS, REQUIRED_TOOLS, probe_tool_versions
 
 VERSION = "23.3.0"
 MARKER = "CODEX-HARNESS-INFRA V23"
@@ -540,6 +540,8 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     reviewer_template = repo_root / "package/agents/v23-reviewer.toml.in"
     skill_source = repo_root / ".agents/skills/engineering-delivery"
     grok_skill_source = repo_root / ".agents/skills/grok-execution"
+    codegraph_skill_source = repo_root / ".agents/skills/codegraph-routing"
+    pi_extension_source = repo_root / "package/pi/v23-enforce-tools.ts"
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
     bounded_search_source = repo_root / "scripts/bounded_search.py"
@@ -552,6 +554,8 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         reviewer_template,
         skill_source,
         grok_skill_source,
+        codegraph_skill_source,
+        pi_extension_source,
         bootstrap_source,
         grok_bridge_source,
         bounded_search_source,
@@ -641,6 +645,16 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             ensure_within(codex_home, codex_home / "skills/grok-execution"),
             grok_skill_source,
             "directory",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "skills/codegraph-routing"),
+            codegraph_skill_source,
+            "directory",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/pi/v23-enforce-tools.ts"),
+            pi_extension_source,
+            "file",
         ),
         Asset(
             ensure_within(codex_home, codex_home / "harness/v23/task_bootstrap.py"),
@@ -999,6 +1013,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "install":
             install(args.repo_root, args.codex_home, args.local_config, args.state_dir)
             print("Codex Harness Infra V23 installed.")
+            config = read_toml(args.local_config)
+            tools = config.get("tools") or {}
+            if isinstance(tools, dict) and any(tools.get(name) for name in REQUIRED_TOOLS):
+                print("Bounded install/migration tool check (never upgrades):")
+                for result in probe_tool_versions(tools):
+                    if result.ok:
+                        status = "ok"
+                    elif result.status == "skipped":
+                        status = "skipped"
+                    else:
+                        status = "failed"
+                    print(f"  {result.name}: {status}: {result.detail}")
         else:
             for line in uninstall(args.codex_home, args.state_dir):
                 print(line)
