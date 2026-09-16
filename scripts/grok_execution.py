@@ -524,10 +524,17 @@ def _configured_tools(args: argparse.Namespace) -> dict[str, str]:
 
 
 def _tools_child_env(tools: dict[str, str]) -> dict[str, str] | None:
-    """Propagate only the configured RTK path into the Pi child environment."""
+    """Propagate the RTK path into the Pi child environment.
+
+    A nonempty ``V23_RTK_BIN`` override wins over the configured ``[tools].rtk``
+    path, matching the CodeGraph resolution order.
+    """
     rtk = tools.get("rtk")
     if not rtk:
         return None
+    override = os.environ.get("V23_RTK_BIN")
+    if isinstance(override, str) and override.strip():
+        return {**os.environ, "V23_RTK_BIN": override}
     return {**os.environ, "V23_RTK_BIN": rtk}
 
 

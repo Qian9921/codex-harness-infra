@@ -1354,6 +1354,32 @@ class GrokExecutionTests(unittest.TestCase):
         assert isinstance(env, dict)
         self.assertEqual(env["V23_RTK_BIN"], str(rtk))
 
+    def test_tools_child_env_rtk_override_precedence(self) -> None:
+        tools = {"rtk": "/configured/rtk"}
+        for override in ("/ambient/rtk", "/nonexistent/rtk"):
+            with (
+                self.subTest(override=override),
+                mock.patch.dict(os.environ, {"V23_RTK_BIN": override}, clear=False),
+            ):
+                env = grok_execution._tools_child_env(tools)
+                assert env is not None
+                self.assertEqual(env["V23_RTK_BIN"], override)
+        for override in ("", "   "):
+            with (
+                self.subTest(override=repr(override)),
+                mock.patch.dict(os.environ, {"V23_RTK_BIN": override}, clear=False),
+            ):
+                env = grok_execution._tools_child_env(tools)
+                assert env is not None
+                self.assertEqual(env["V23_RTK_BIN"], "/configured/rtk")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("V23_RTK_BIN", None)
+            env = grok_execution._tools_child_env(tools)
+            assert env is not None
+            self.assertEqual(env["V23_RTK_BIN"], "/configured/rtk")
+        with mock.patch.dict(os.environ, {"V23_RTK_BIN": "/ambient/rtk"}, clear=False):
+            self.assertIsNone(grok_execution._tools_child_env({}))
+
     def test_run_reports_invalid_configured_codegraph_honestly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             cwd = pathlib.Path(directory).resolve()
