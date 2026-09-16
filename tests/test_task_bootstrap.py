@@ -74,6 +74,7 @@ class FakeRunner:
         codegraph_status: dict | None = None,
         rtk_fail_routes: tuple[str, ...] = (),
         rtk_probe_fail: bool = False,
+        rtk_pytest_fail: bool = False,
         update_check_fail: bool = False,
     ) -> None:
         self.root = root
@@ -83,6 +84,7 @@ class FakeRunner:
         self.codegraph_status = dict(codegraph_status or self.FRESH_STATUS)
         self.rtk_fail_routes = set(rtk_fail_routes)
         self.rtk_probe_fail = rtk_probe_fail
+        self.rtk_pytest_fail = rtk_pytest_fail
         self.update_check_fail = update_check_fail
         self.calls: list[tuple[tuple[str, ...], Path | None]] = []
         self.timeouts: list[int] = []
@@ -132,6 +134,8 @@ class FakeRunner:
         if command[0] == rtk:
             if "--help" in command and command[1] in self.rtk_fail_routes:
                 return subprocess.CompletedProcess(command, 1, "", f"unknown command {command[1]}")
+            if self.rtk_pytest_fail and command[1] == "pytest" and "--version" in command:
+                return subprocess.CompletedProcess(command, 1, "", "pytest route exploded")
             if self.rtk_probe_fail and "--help" not in command:
                 return subprocess.CompletedProcess(command, 1, "", "routed probe exploded")
             return subprocess.CompletedProcess(command, 0, "ok\n", "")
@@ -189,7 +193,8 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertIn(CODEGRAPH_BEGIN, exclude)
             self.assertIn(".codegraph/", exclude)
 
-    def test_fresh_index_skips_refresh_and_checks_status_before_query(self) -> None:
+    def test_fresh_status_still_refreshes_before_query(self) -> None:
+        """A zero pending count is not proof of freshness: a writable probe syncs first."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / ".git/info").mkdir(parents=True)
@@ -198,15 +203,41 @@ class TaskBootstrapTests(unittest.TestCase):
             runner = FakeRunner(root)
 
             results = probe_tools(
-                root, "Inspect the delivery adapter.", {"codegraph": str(executable)}, runner=runner
+                root, "Change the delivery adapter.", {"codegraph": str(executable)}, runner=runner
             )
 
             self.assertTrue(results[0].ok)
             codegraph_calls = [
                 command for command, _ in runner.calls if command[0] == str(executable)
             ]
-            self.assertEqual([command[1] for command in codegraph_calls], ["status", "query"])
+            self.assertEqual(
+                [command[1] for command in codegraph_calls], ["status", "sync", "status", "query"]
+            )
             self.assertNotIn("files", [part for command in codegraph_calls for part in command])
+
+    def test_read_only_fresh_index_states_unknown_freshness_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            executable = root / "codegraph"
+            executable.write_text("", encoding="utf-8")
+            runner = FakeRunner(root)
+
+            results = probe_tools(
+                root,
+                "Read-only investigation.",
+                {"codegraph": str(executable)},
+                runner=runner,
+                initialize_codegraph=False,
+            )
+
+            self.assertTrue(results[0].ok)
+            self.assertIn("freshness not verifiable", results[0].detail)
+            self.assertIn("cross-check current source", results[0].detail)
+            codegraph_calls = [
+                command for command, _ in runner.calls if command[0] == str(executable)
+            ]
+            self.assertEqual([command[1] for command in codegraph_calls], ["status", "query"])
             self.assertNotIn("init", [command[1] for command in codegraph_calls])
             self.assertNotIn("sync", [command[1] for command in codegraph_calls])
 
@@ -281,7 +312,10 @@ class TaskBootstrapTests(unittest.TestCase):
             codegraph_calls = [
                 command for command, _ in runner.calls if command[0] == str(executable)
             ]
-            self.assertEqual([command[1] for command in codegraph_calls], ["status", "callers"])
+            self.assertEqual(
+                [command[1] for command in codegraph_calls],
+                ["status", "sync", "status", "callers"],
+            )
             self.assertNotIn("query", [command[1] for command in codegraph_calls])
             self.assertNotIn("files", [part for command in codegraph_calls for part in command])
             callers = codegraph_calls[-1]
@@ -312,6 +346,10 @@ class TaskBootstrapTests(unittest.TestCase):
                 self.assertTrue(
                     any(command[1] == route and "--help" in command for command in rtk_calls)
                 )
+            self.assertTrue(
+                any(command[1] == "pytest" and "--version" in command for command in rtk_calls),
+                rtk_calls,
+            )
 
     def test_rtk_unsupported_route_and_routed_failure_keep_raw_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -336,6 +374,22 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertIn("routed probe exploded", failed.detail)
             self.assertIn("raw", failed.detail)
 
+    def test_rtk_pytest_dispatch_failure_stays_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            executable = root / "rtk"
+            executable.write_text("", encoding="utf-8")
+            runner = FakeRunner(root, rtk_pytest_fail=True)
+
+            result = probe_tools(root, "Compact summary.", {"rtk": str(executable)}, runner=runner)[
+                2
+            ]
+
+            self.assertFalse(result.ok)
+            self.assertIn("pytest dispatch failed", result.detail)
+            self.assertIn("keep commands raw", result.detail)
+
     def test_probe_tool_versions_checks_updates_without_upgrading(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -351,7 +405,11 @@ class TaskBootstrapTests(unittest.TestCase):
             names = [result.name for result in results]
             self.assertIn("CodeGraph version", names)
             self.assertIn("CodeGraph update", names)
-            self.assertTrue(all(result.ok for result in results))
+            verified = {result.name: result for result in results}
+            self.assertTrue(verified["CodeGraph version"].ok)
+            self.assertTrue(verified["CodeGraph update"].ok)
+            self.assertFalse(verified["Semble version"].ok)
+            self.assertIn("unknown", verified["Semble version"].detail)
             codegraph_calls = [
                 command for command, _ in runner.calls if command[0] == tools["codegraph"]
             ]
@@ -397,7 +455,7 @@ class TaskBootstrapTests(unittest.TestCase):
                         "CodeGraph", False, "not configured; baseline bounded-search/direct reads"
                     ),
                     ToolResult("Semble", False, "not configured; semantic discovery skipped"),
-                    ToolResult("RTK", True, "ok"),
+                    ToolResult("RTK", True, "ok; ok"),
                 ],
             )
 

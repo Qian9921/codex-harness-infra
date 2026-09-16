@@ -185,10 +185,15 @@ class HarnessScenarioEvals(unittest.TestCase):
             self.assertTrue(all(result.ok for result in results))
             commands = runner.calls
             codegraph_commands = [c for c in commands if c[0] == tools["codegraph"]]
-            self.assertEqual([c[1] for c in codegraph_commands], ["status", "query"])
+            self.assertEqual(
+                [c[1] for c in codegraph_commands], ["status", "sync", "status", "query"]
+            )
             self.assertNotIn("files", [part for command in commands for part in command])
             self.assertTrue(any(command[:2] == (tools["semble"], "search") for command in commands))
             self.assertTrue(any(command[:2] == (tools["rtk"], "git") for command in commands))
+            self.assertTrue(
+                any(command[:3] == (tools["rtk"], "pytest", "--version") for command in commands)
+            )
 
     def test_missing_tool_does_not_skip_remaining_tools(self) -> None:
         directory, root, tools, runner = self.tool_environment(configured=("rtk",))
@@ -217,13 +222,22 @@ class HarnessScenarioEvals(unittest.TestCase):
             )
             self.assertTrue(results[0].ok)
             codegraph_calls = [c for c in runner.calls if c[0] == tools["codegraph"]]
-            self.assertEqual([c[1] for c in codegraph_calls], ["status", "callers"])
+            self.assertEqual(
+                [c[1] for c in codegraph_calls], ["status", "sync", "status", "callers"]
+            )
             self.assertNotIn("files", [part for command in runner.calls for part in command])
 
     def test_stale_index_refreshes_or_states_read_only_limit(self) -> None:
         directory, root, tools, runner = self.tool_environment()
         with directory:
             runner.codegraph_status["pendingChanges"] = {"added": 0, "modified": 1, "removed": 0}
+            results = probe_tools(root, "Change assemble.", tools, runner=runner)
+            self.assertTrue(results[0].ok)
+            self.assertIn("sync", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            # CodeGraph has reported zero pending while sync then found changes,
+            # so a zero pending count cannot skip the writable refresh.
             results = probe_tools(root, "Change assemble.", tools, runner=runner)
             self.assertTrue(results[0].ok)
             self.assertIn("sync", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
@@ -241,6 +255,7 @@ class HarnessScenarioEvals(unittest.TestCase):
             self.assertIn("read-only", results[0].detail)
             self.assertIn("bounded-search", results[0].detail)
             self.assertNotIn("init", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
+            self.assertNotIn("sync", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
 
     def test_rtk_routes_finite_verified_set_and_preserves_failure(self) -> None:
         directory, root, tools, runner = self.tool_environment()
@@ -250,6 +265,7 @@ class HarnessScenarioEvals(unittest.TestCase):
             rtk_calls = [c for c in runner.calls if c[0] == tools["rtk"]]
             self.assertTrue(all(c[1] in RTK_VERIFIED_ROUTES for c in rtk_calls))
             self.assertFalse(any("--short" in c or "--json" in c for c in rtk_calls))
+            self.assertTrue(any(c[:3] == (tools["rtk"], "pytest", "--version") for c in rtk_calls))
         failing_directory, failing_root, failing_tools, _failing_runner = self.tool_environment()
         with failing_directory:
             failing = ToolRunner(failing_root, rtk_probe_fail=True)

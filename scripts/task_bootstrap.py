@@ -290,7 +290,14 @@ def _codegraph_state_text(payload: dict[str, object]) -> str:
 
 
 def _codegraph_stale(payload: dict[str, object]) -> bool:
-    """True when the current tree differs from the indexed tree or was never complete."""
+    """Positive evidence that the current tree differs from the indexed tree.
+
+    A reported ``pendingChanges`` of zero is NOT proof of freshness: CodeGraph
+    1.5.0 has been observed reporting zero pending while ``sync`` then found
+    added and modified files. Callers with write authority therefore refresh
+    before relying on the index, and read-only callers treat freshness as
+    unknown and cross-check the current source.
+    """
     pending = payload.get("pendingChanges")
     if isinstance(pending, dict) and any(
         isinstance(value, (int, float)) and value > 0 for value in pending.values()
@@ -361,30 +368,37 @@ def _codegraph_result(
             return ToolResult("CodeGraph", False, detail)
     status_ok, status, payload = _codegraph_status(executable, root, runner)
     initialized = status_ok and bool(payload.get("initialized"))
-    stale = initialized and _codegraph_stale(payload)
-    if not initialized or stale:
-        if initialized:
-            state = "stale index"
-        elif status_ok:
-            state = "index missing"
-        else:
-            state = "index status unavailable"
+    if not initialized:
+        state = "index missing" if status_ok else "index status unavailable"
         if not initialize:
             return ToolResult(
                 "CodeGraph",
                 False,
                 f"{state}; read-only fallback to bounded-search/direct reads, state the limit",
             )
-        if not initialized:
-            initialized_ok, init_detail = _run(
-                (executable, "init", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
+        initialized_ok, init_detail = _run(
+            (executable, "init", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
+        )
+        if not initialized_ok:
+            return ToolResult(
+                "CodeGraph",
+                False,
+                f"init failed: {init_detail}; baseline bounded-search/direct reads",
             )
-            if not initialized_ok:
-                return ToolResult(
-                    "CodeGraph",
-                    False,
-                    f"init failed: {init_detail}; baseline bounded-search/direct reads",
-                )
+    if not initialize:
+        if _codegraph_stale(payload):
+            return ToolResult(
+                "CodeGraph",
+                False,
+                "stale index; read-only fallback to bounded-search/direct reads, state the limit",
+            )
+        note = (
+            "; freshness not verifiable from status alone (read-only); cross-check current source"
+        )
+    else:
+        note = ""
+        # The declared pending count cannot prove freshness, so an authorized
+        # writer always refreshes before relying on the index.
         synced, sync_detail = _run(
             (executable, "sync", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
         )
@@ -418,7 +432,9 @@ def _codegraph_result(
         return ToolResult(
             "CodeGraph",
             queried,
-            detail if queried else f"structural query failed: {detail}; cross-check current source",
+            detail + note
+            if queried
+            else f"structural query failed: {detail}; cross-check current source",
         )
     if query:
         queried, detail = _run(
@@ -431,9 +447,11 @@ def _codegraph_result(
         return ToolResult(
             "CodeGraph",
             queried,
-            detail if queried else f"focused query failed: {detail}; cross-check current source",
+            detail + note
+            if queried
+            else f"focused query failed: {detail}; cross-check current source",
         )
-    return ToolResult("CodeGraph", True, f"index check: {status}")
+    return ToolResult("CodeGraph", True, f"index check: {status}{note}")
 
 
 def _prompt_query(prompt: str) -> str:
@@ -495,10 +513,56 @@ def _rtk_result(
     ok, detail = _run(command, cwd, runner, RTK_TIMEOUT_SECONDS, root)
     if not ok:
         return ToolResult("RTK", False, f"routed probe failed: {detail}; keep commands raw")
-    note = (
-        "" if not unsupported else f"; raw fallback for unsupported routes: {','.join(unsupported)}"
+    notes = [detail]
+    if "pytest" not in unsupported:
+        # Dispatch the concrete route instead of trusting --help alone; the
+        # bounded --version call proves rtk actually executes pytest.
+        dispatched, dispatch_detail = _run(
+            (executable, "pytest", "--version"), cwd, runner, RTK_TIMEOUT_SECONDS, root
+        )
+        if not dispatched:
+            return ToolResult(
+                "RTK",
+                False,
+                f"pytest dispatch failed: {dispatch_detail}; keep commands raw",
+            )
+        notes.append(dispatch_detail)
+    if unsupported:
+        notes.append(f"raw fallback for unsupported routes: {','.join(unsupported)}")
+    return ToolResult("RTK", True, "; ".join(notes))
+
+
+def preflight_codegraph(
+    cwd: Path,
+    *,
+    writable: bool,
+    symbol: str | None = None,
+    query: str = "",
+    runner: CommandRunner | None = None,
+) -> ToolResult:
+    """Explicit code-task preflight: owner index before exploration, CodeGraph only.
+
+    Called only when a code task is explicitly declared, never per prompt and
+    never for general tasks. ``writable`` refreshes (``init``/``sync``) in the
+    authorized owner repository and treats a zero pending count as no proof of
+    freshness; a read-only preflight never writes and reports freshness as
+    unknown. A structural ``symbol`` or focused ``query`` is passed through to
+    the same owned index helper used by Doctor.
+    """
+    runner = runner or _system_runner
+    cwd = cwd.resolve()
+    root = _git_root(cwd, runner)
+    executable = _resolve_executable(os.environ.get("V23_CODEGRAPH_BIN")) or _resolve_executable(
+        "codegraph"
     )
-    return ToolResult("RTK", True, detail + note)
+    return _codegraph_result(
+        executable,
+        root,
+        runner,
+        writable,
+        query=query,
+        symbol=symbol,
+    )
 
 
 def probe_tools(
@@ -551,13 +615,19 @@ def probe_tool_versions(
             )
         )
     semble = _resolve_executable(tools.get("semble"))
-    results.append(
-        ToolResult(
-            "Semble version",
-            True,
-            "installed; CLI does not expose --version" if semble else "not configured; optional",
+    if not semble:
+        results.append(
+            ToolResult("Semble version", False, "unknown: not configured; version not verified")
         )
-    )
+    else:
+        checked, detail = _run((semble, "--version"), None, runner, RTK_TIMEOUT_SECONDS)
+        results.append(
+            ToolResult(
+                "Semble version",
+                checked,
+                detail if checked else f"unknown: {detail or 'CLI does not expose --version'}",
+            )
+        )
     codegraph = _resolve_executable(tools.get("codegraph"))
     if codegraph:
         checked, detail = _run(
@@ -578,7 +648,7 @@ def probe_tool_versions(
 def _privacy_text(value: str) -> str:
     """Drop secret-shaped fragments and cap one field."""
     text = SECRET_FRAGMENT.sub("[redacted]", " ".join(value.strip().split()))
-    return text[:220] if text else "unavailable"
+    return text[:320] if text else "unavailable"
 
 
 def _field_ok(name: str, detail: str) -> LiveField:
@@ -1142,6 +1212,17 @@ def local_installation_checks(
     checks.append(("bounded_search", bounded_ok, bounded_detail))
     life_ok, life_detail = _bridge_file(lifecycle)
     checks.append(("grok_process_lifecycle", life_ok, life_detail))
+    enforcement = codex_home / "harness/v23/pi/v23-enforce-tools.ts"
+    enforcement_ok, enforcement_detail = _bridge_file(enforcement)
+    checks.append(("pi_enforcement_extension", enforcement_ok, enforcement_detail))
+    codegraph_skill = codex_home / "skills/codegraph-routing/SKILL.md"
+    checks.append(
+        (
+            "codegraph_routing_skill",
+            codegraph_skill.is_file() and not codegraph_skill.is_symlink(),
+            str(codegraph_skill),
+        )
+    )
     try:
         local = tomllib.loads(local_config.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -1194,7 +1275,11 @@ def local_installation_checks(
     if not require_grok:
         rewritten: list[tuple[str, bool, str]] = []
         for name, ok, detail in checks:
-            if name in {"grok_execution_route", "grok_process_lifecycle"}:
+            if name in {
+                "grok_execution_route",
+                "grok_process_lifecycle",
+                "pi_enforcement_extension",
+            }:
                 rewritten.append(
                     (name, True, "unrequired for current routing" if not ok else detail)
                 )

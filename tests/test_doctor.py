@@ -75,6 +75,8 @@ rtk = "rtk"
             self.assertTrue(checks["grok_execution_route"]["ok"])
             self.assertTrue(checks["bounded_search"]["ok"])
             self.assertTrue(checks["grok_process_lifecycle"]["ok"])
+            self.assertTrue(checks["pi_enforcement_extension"]["ok"])
+            self.assertTrue(checks["codegraph_routing_skill"]["ok"])
             detail = str(checks["grok_execution_route"]["detail"])
             self.assertIn(str(codex_home / "bin/grok-execution.py"), detail)
             self.assertIn(str(ROOT / "scripts/grok_execution.py"), detail)
@@ -428,6 +430,55 @@ rtk = "rtk"
             )
             names = {check["name"] for check in unprobed["checks"]}
             self.assertNotIn("tool_codegraph_update", names)
+
+    def test_probe_updates_runs_when_semble_is_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[tools]
+codegraph = "codegraph"
+rtk = "rtk"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            seen: list[dict] = []
+
+            def update_probe(tools: dict) -> list[ToolResult]:
+                seen.append(tools)
+                return [
+                    ToolResult("CodeGraph version", True, "1.5.0"),
+                    ToolResult("CodeGraph update", True, "update check unavailable (offline)"),
+                    ToolResult("RTK version", True, "0.44.1"),
+                    ToolResult(
+                        "Semble version", False, "unknown: not configured; version not verified"
+                    ),
+                ]
+
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+                probe_updates=True,
+                update_probe=update_probe,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(seen)
+            self.assertNotIn("semble", seen[0])
+            self.assertTrue(checks["tool_codegraph_version"]["ok"])
+            self.assertTrue(checks["tool_rtk_version"]["ok"])
+            self.assertFalse(checks["tool_semble_version"]["ok"])
+            self.assertIn("unknown", str(checks["tool_semble_version"]["detail"]))
 
     def test_github_write_without_identities_is_unready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

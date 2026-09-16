@@ -11,13 +11,20 @@ the only V23 hook, is never a Stop hook, and does not probe optional tools.
 Daemon probes are explicit.
 
 A missing or stale index is created or refreshed only in an authorized writable
-owner repository from current-tree freshness, not commit metadata alone.
-Read-only work does not refresh: it traces source with the bounded-search
-helper and states the limit. Optional CodeGraph is for structural
+owner repository from current-tree freshness, not commit metadata alone. A
+reported zero `pendingChanges` is not proof of freshness: CodeGraph has
+reported zero while `sync` then found added and modified files, so writable
+work syncs before relying on the index. Read-only work does not refresh: it
+treats freshness as unknown, traces source with the bounded-search helper, and
+states the limit. Optional CodeGraph is for structural
 disambiguation, callers, dependencies, or impact. Semble stays optional after
 bounded keywords fail. RTK routes only a finite verified supported set
-(`rtk git`, `rtk ls`, `rtk pytest`); exact JSON, porcelain, diffs, and
-necessary raw diagnostics stay raw and preserve exit status. A tool that is
+(`rtk git`, `rtk ls`, `rtk pytest`); the explicitly loaded owned Pi extension
+routes plain `pytest` and `python -m pytest` through `rtk pytest` by default.
+Exact JSON, porcelain, diffs, and
+necessary raw diagnostics stay raw and preserve exit status; unsupported
+compound shell syntax is never silently rewritten, and a missing rtk falls
+back to the explicit raw command. A tool that is
 absent, fails, or cannot provide a writable index uses an explicit short
 baseline fallback and says so; never report it as not needed. Tool output is
 evidence, not a conclusion.

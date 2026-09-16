@@ -880,7 +880,8 @@ target = "native"
             self.assertIn("Semble stays optional", instructions)
             self.assertIn("not installed by this Harness", instructions)
             self.assertIn("inspect that binary's --help", instructions)
-            self.assertIn("fresh usable index", instructions)
+            self.assertIn("zero pending changes is not proof of freshness", instructions)
+            self.assertIn("read-only work treats freshness as unknown", instructions)
             self.assertIn("command -v", instructions)
             self.assertIn("internal tool databases", instructions)
             if label == "quota_fallback":

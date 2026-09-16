@@ -180,7 +180,8 @@ def doctor(
             )
         for result in tool_results:
             checks.append(_result(f"tool_{result.name.casefold()}", result.ok, result.detail))
-    if local_ok is not None and local_ok[1] and probe_updates and not missing:
+    configured_tools = [name for name in ("codegraph", "semble", "rtk") if tools.get(name)]
+    if local_ok is not None and local_ok[1] and probe_updates and configured_tools:
         try:
             version_results = update_probe(tools)
         except (OSError, ValueError, subprocess.SubprocessError) as error:

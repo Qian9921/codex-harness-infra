@@ -58,12 +58,17 @@ obligations have explicit triggers: code investigation or change checks the
 owner-repo CodeGraph index before code exploration and cross-checks current
 source; cross-file callers, dependencies, or impact uses a focused structural
 query, not only a file listing; a missing or stale index is refreshed only in
-an authorized writable owner repo from current-tree freshness, while read-only
-work traces source and states the limit. Unknown implementation after
+an authorized writable owner repo. A reported zero pending count is not proof
+of freshness: writable work syncs before relying on the index, while read-only
+work treats freshness as unknown, traces source, and states the limit.
+Unknown implementation after
 insufficient keywords: focused, optional Semble in a known repo/module. RTK
-routes only a finite verified supported set (compact pytest summaries); exact
-JSON/porcelain/diffs and necessary raw diagnostics stay raw and preserve exit
-status. Tool absence, real failure, or a read-only missing index: explicit
+routes only a finite verified supported set (compact pytest summaries), and
+the explicitly loaded owned Pi extension routes plain pytest through it by
+default; exact JSON/porcelain/diffs and necessary raw diagnostics stay raw and
+preserve exit status, compound shell syntax is never silently rewritten, and
+an absent rtk falls back to the explicit raw command. Tool absence, real
+failure, or a read-only missing index: explicit
 short baseline fallback, never "not needed". tgrep is experimental, not a
 default backend, and is not installed by this Harness (a user may already have
 it). Unknown or version-different commands: inspect `--help`, then baseline.

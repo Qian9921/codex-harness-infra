@@ -540,6 +540,8 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
     reviewer_template = repo_root / "package/agents/v23-reviewer.toml.in"
     skill_source = repo_root / ".agents/skills/engineering-delivery"
     grok_skill_source = repo_root / ".agents/skills/grok-execution"
+    codegraph_skill_source = repo_root / ".agents/skills/codegraph-routing"
+    pi_extension_source = repo_root / "package/pi/v23-enforce-tools.ts"
     bootstrap_source = repo_root / "scripts/task_bootstrap.py"
     grok_bridge_source = repo_root / "scripts/grok_execution.py"
     bounded_search_source = repo_root / "scripts/bounded_search.py"
@@ -552,6 +554,8 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
         reviewer_template,
         skill_source,
         grok_skill_source,
+        codegraph_skill_source,
+        pi_extension_source,
         bootstrap_source,
         grok_bridge_source,
         bounded_search_source,
@@ -641,6 +645,16 @@ def _assets(repo_root: Path, codex_home: Path, config: dict) -> list[Asset]:
             ensure_within(codex_home, codex_home / "skills/grok-execution"),
             grok_skill_source,
             "directory",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "skills/codegraph-routing"),
+            codegraph_skill_source,
+            "directory",
+        ),
+        Asset(
+            ensure_within(codex_home, codex_home / "harness/v23/pi/v23-enforce-tools.ts"),
+            pi_extension_source,
+            "file",
         ),
         Asset(
             ensure_within(codex_home, codex_home / "harness/v23/task_bootstrap.py"),

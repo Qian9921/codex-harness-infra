@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 from scripts import grok_execution
@@ -133,6 +133,37 @@ def _cli(command: str, session_dir: str, extra: list[str] | None = None) -> list
     return argv
 
 
+class PreflightRunner:
+    """Deterministic CodeGraph/git transcript for adapter preflight tests."""
+
+    FRESH_STATUS: ClassVar[dict[str, object]] = {
+        "initialized": True,
+        "fileCount": 3,
+        "pendingChanges": {"added": 0, "modified": 0, "removed": 0},
+        "index": {"state": "complete", "reindexRecommended": False},
+        "lastIndexed": "2026-09-16T00:00:00.000Z",
+    }
+
+    def __init__(self, root: pathlib.Path) -> None:
+        self.root = str(root.resolve())
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(
+        self, command: tuple[str, ...], _cwd: pathlib.Path | None, _timeout: int
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append(command)
+        if command[:4] == ("git", "-C", self.root, "rev-parse"):
+            output = f"{self.root}\n" if command[-1] == "--show-toplevel" else ".git/info/exclude\n"
+            return subprocess.CompletedProcess(command, 0, output, "")
+        if command[0].endswith("codegraph"):
+            if command[1] == "status" and "--json" in command:
+                return subprocess.CompletedProcess(
+                    command, 0, json.dumps(self.FRESH_STATUS) + "\n", ""
+                )
+            return subprocess.CompletedProcess(command, 0, "ok\n", "")
+        return subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+
 class GrokExecutionTests(unittest.TestCase):
     def test_bound_prompt_covers_implementation_and_concise_result(self) -> None:
         with mock.patch.dict(os.environ, {"CODEX_HOME": "/tmp/codex-home-for-prompt"}):
@@ -172,8 +203,11 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertIn("focused structural query", wrapper)
         self.assertIn("cannot waive the structural query", wrapper)
         self.assertIn("current tree rather than commit metadata alone", wrapper)
-        self.assertIn("fresh usable index", wrapper)
-        self.assertIn("read-only work may use a fresh usable index but does not refresh", wrapper)
+        self.assertIn("zero pending changes is not proof of freshness", wrapper)
+        self.assertIn("read-only work treats freshness as unknown", wrapper)
+        self.assertIn("The owned Pi extension routes", wrapper)
+        self.assertIn("python -m pytest", wrapper)
+        self.assertIn("never silently rewritten", wrapper)
         self.assertIn("finite verified supported set", wrapper)
         self.assertIn("explicit raw exceptions", wrapper)
         self.assertIn("preserves exit status and diagnostics", wrapper)
@@ -1045,6 +1079,218 @@ class GrokExecutionTests(unittest.TestCase):
             grok_execution._run(_run_args(directory))
         self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
         self.assertIn("non-success stop reason", str(raised.exception))
+
+    def test_declared_code_task_preflights_before_pi_spawn(self) -> None:
+        events: list[tuple[str, tuple[str, ...]]] = []
+        prompt_seen: dict[str, str] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            (cwd / ".git/info").mkdir(parents=True)
+            codegraph = cwd / "codegraph"
+            codegraph.write_text("", encoding="utf-8")
+            runner = PreflightRunner(cwd)
+
+            def recording_runner(command, run_cwd, timeout):
+                events.append(("preflight", command))
+                return runner(command, run_cwd, timeout)
+
+            def fake_run(command, _cwd=None, **_kwargs):
+                events.append(("pi", tuple(command)))
+                prompt_arg = next(part for part in command if str(part).startswith("@"))
+                prompt_seen["text"] = pathlib.Path(str(prompt_arg)[1:]).read_text(encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
+
+            with (
+                mock.patch.dict(os.environ, {"V23_CODEGRAPH_BIN": str(codegraph)}, clear=False),
+                mock.patch("scripts.task_bootstrap._system_runner", recording_runner),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(directory, task_kind="code", codegraph_refresh=True)
+                )
+        kinds = [kind for kind, _command in events]
+        self.assertEqual(kinds[0], "preflight")
+        self.assertEqual(kinds[-1], "pi")
+        codegraph_calls = [
+            command
+            for kind, command in events
+            if kind == "preflight" and command[0] == str(codegraph)
+        ]
+        self.assertEqual([command[1] for command in codegraph_calls], ["status", "sync", "status"])
+        self.assertEqual(receipt["task_kind"], "code")
+        self.assertTrue(receipt["codegraph_preflight"]["ok"])
+        self.assertIn("Declared task kind: code", prompt_seen["text"])
+        self.assertIn("CodeGraph preflight", prompt_seen["text"])
+
+    def test_read_only_code_preflight_never_writes(self) -> None:
+        events: list[tuple[str, tuple[str, ...]]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            (cwd / ".git/info").mkdir(parents=True)
+            codegraph = cwd / "codegraph"
+            codegraph.write_text("", encoding="utf-8")
+            runner = PreflightRunner(cwd)
+
+            def recording_runner(command, run_cwd, timeout):
+                events.append(("preflight", command))
+                return runner(command, run_cwd, timeout)
+
+            with (
+                mock.patch.dict(os.environ, {"V23_CODEGRAPH_BIN": str(codegraph)}, clear=False),
+                mock.patch("scripts.task_bootstrap._system_runner", recording_runner),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, _pi_jsonl(), ""),
+                ),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(directory, task_kind="code", codegraph_symbol="assemble")
+                )
+        codegraph_calls = [
+            command
+            for kind, command in events
+            if kind == "preflight" and command[0] == str(codegraph)
+        ]
+        self.assertEqual([command[1] for command in codegraph_calls], ["status", "callers"])
+        self.assertNotIn("init", [command[1] for command in codegraph_calls])
+        self.assertNotIn("sync", [command[1] for command in codegraph_calls])
+        self.assertTrue(receipt["codegraph_preflight"]["ok"])
+        self.assertIn("freshness not verifiable", receipt["codegraph_preflight"]["detail"])
+
+    def test_cross_file_task_requires_focused_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(
+                    grok_execution.BridgeError,
+                    "code-cross-file requires --codegraph-symbol or --codegraph-query",
+                ),
+            ):
+                grok_execution._run(_run_args(directory, task_kind="code-cross-file"))
+            supervised.assert_not_called()
+
+    def test_general_task_rejects_codegraph_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(grok_execution.BridgeError, "require --task-kind code"),
+            ):
+                grok_execution._run(_run_args(directory, codegraph_refresh=True))
+            supervised.assert_not_called()
+
+    def test_general_task_never_runs_codegraph_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(grok_execution, "_codegraph_preflight") as preflight,
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, _pi_jsonl(), ""),
+                ),
+            ):
+                receipt = grok_execution._run(_run_args(directory))
+            preflight.assert_not_called()
+        self.assertEqual(receipt["task_kind"], "general")
+        self.assertIsNone(receipt["codegraph_preflight"])
+
+    def test_installed_extension_is_resolved_from_codex_home(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            extension = home / "harness/v23/pi/v23-enforce-tools.ts"
+            extension.parent.mkdir(parents=True)
+            extension.write_text("export default function () {}\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ, {"CODEX_HOME": str(home), "V23_PI_EXTENSION": ""}, clear=False
+            ):
+                self.assertEqual(grok_execution._enforcement_extension(), extension.resolve())
+
+    def test_cross_file_declaration_runs_the_focused_structural_query(self) -> None:
+        events: list[tuple[str, tuple[str, ...]]] = []
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            (cwd / ".git/info").mkdir(parents=True)
+            codegraph = cwd / "codegraph"
+            codegraph.write_text("", encoding="utf-8")
+            runner = PreflightRunner(cwd)
+
+            def recording_runner(command, run_cwd, timeout):
+                events.append(("preflight", command))
+                return runner(command, run_cwd, timeout)
+
+            with (
+                mock.patch.dict(os.environ, {"V23_CODEGRAPH_BIN": str(codegraph)}, clear=False),
+                mock.patch("scripts.task_bootstrap._system_runner", recording_runner),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, _pi_jsonl(), ""),
+                ),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(
+                        directory,
+                        task_kind="code-cross-file",
+                        codegraph_symbol="assemble",
+                    )
+                )
+        codegraph_calls = [
+            command
+            for kind, command in events
+            if kind == "preflight" and command[0] == str(codegraph)
+        ]
+        self.assertEqual([command[1] for command in codegraph_calls], ["status", "callers"])
+        callers = codegraph_calls[-1]
+        self.assertIn("assemble", callers)
+        self.assertIn("--json", callers)
+        self.assertEqual(receipt["task_kind"], "code-cross-file")
+
+    def test_run_loads_owned_extension_and_passes_rtk_log(self) -> None:
+        observed: dict[str, object] = {}
+
+        def fake_run(command, _cwd=None, **_kwargs):
+            observed["argv"] = list(command)
+            return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+        ):
+            receipt = grok_execution._run(_run_args(directory))
+        argv = observed["argv"]
+        assert isinstance(argv, list)
+        self.assertIn("--no-extensions", argv)
+        extension_index = argv.index("-e")
+        extension = str(argv[extension_index + 1])
+        self.assertTrue(extension.endswith("v23-enforce-tools.ts"))
+        self.assertEqual(extension, str(grok_execution._enforcement_extension()))
+        log_index = argv.index("--v23-rtk-log")
+        rtk_log = str(argv[log_index + 1])
+        self.assertEqual(
+            rtk_log,
+            str(pathlib.Path(directory).resolve() / "pi-sessions" / "quota-test.rtk.jsonl"),
+        )
+        self.assertEqual(receipt["enforcement_extension"], extension)
+        self.assertEqual(receipt["rtk_log"], rtk_log)
+
+    def test_missing_explicit_enforcement_extension_fails_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "missing-extension.ts"
+            with (
+                mock.patch.dict(os.environ, {"V23_PI_EXTENSION": str(missing)}, clear=False),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run") as supervised,
+                self.assertRaisesRegex(
+                    grok_execution.BridgeError, "V23_PI_EXTENSION is not the owned extension file"
+                ),
+            ):
+                grok_execution._run(_run_args(directory))
+            supervised.assert_not_called()
 
     def test_prompt_stays_off_argv_and_file_is_mode_0600_during_subprocess(self) -> None:
         observed: dict[str, object] = {}

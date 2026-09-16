@@ -138,7 +138,7 @@ test = "tests.test_evaluate.HarnessScenarioEvals.test_index_check_precedes_struc
 id = "codegraph-stale-or-read-only"
 dimension = "tools"
 prompt = "Change the assembly path, or investigate read-only."
-expected = "A writable owner index with pending changes is synced; a read-only missing index states the bounded-search limit."
+expected = "A writable owner index always syncs because a zero pending count is not proof of freshness; a read-only index never writes and states the unknown-freshness limit."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_stale_index_refreshes_or_states_read_only_limit"
 
 [[scenario]]

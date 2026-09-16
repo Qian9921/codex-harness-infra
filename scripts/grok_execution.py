@@ -24,6 +24,9 @@ THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh",
 SUCCESS_STOP_REASONS = frozenset({"stop"})
 FAILED_STOP_REASONS = frozenset({"error", "aborted", "length", "pending"})
 PI_TOOLS = "read,bash,edit,write"
+TASK_KINDS = frozenset({"general", "code", "code-cross-file"})
+# Owned Pi extension loaded explicitly together with ``--no-extensions``.
+PI_ENFORCEMENT_EXTENSION_RELATIVE = "harness/v23/pi/v23-enforce-tools.ts"
 TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
@@ -408,19 +411,26 @@ TOOL_SELECTION_GUIDANCE = (
     "callers, dependencies, or impact: run a focused structural query "
     "(`codegraph query|callers|callees|impact -p <repo> --json <symbol>`); a "
     "file listing or lexical match cannot waive the structural query. Missing "
-    "or stale index (not initialized, nonzero pending changes, "
+    "or stale index (not initialized, any nonzero pending count, "
     "reindexRecommended, or incomplete state): create or refresh it "
     "(`codegraph init`/`sync`) only in an authorized writable owner repository, "
-    "judging freshness from the current tree rather than commit metadata alone; "
-    "read-only work may use a fresh usable index but does not refresh, traces "
-    "with bounded-search, and states the limit. Known file, exact symbol, or "
+    "judging freshness from the current tree rather than commit metadata alone. "
+    "A status that reports zero pending changes is not proof of freshness: "
+    "refresh with `sync` in an authorized writable owner repository before "
+    "relying on the index; read-only work treats freshness as unknown, does "
+    "not refresh, traces with bounded-search, cross-checks current source, "
+    "and states the limit. Known file, exact symbol, or "
     "exact text: bounded-search or a direct read. Unknown implementation after "
     "insufficient bounded keywords: focused Semble in a known repo or module, "
     "then inspect the cited files; Semble stays optional and query echo is not "
     "an answer. RTK routes only the finite verified supported set (for example "
-    "`rtk pytest <args>` compact test summaries); exact JSON, porcelain, "
-    "unified diffs, and necessary raw diagnostics are explicit raw exceptions, "
-    "and a routed failure preserves exit status and diagnostics. Tool absent, "
+    "`rtk pytest <args>` compact test summaries). The owned Pi extension routes "
+    "plain `pytest` and `python -m pytest` through `rtk pytest` by default; "
+    "exact JSON, porcelain, unified diffs, and necessary raw diagnostics are "
+    "explicit raw exceptions, unsupported compound shell syntax is never "
+    "silently rewritten, an absent or failed rtk falls back to the explicit "
+    "raw command, and a routed failure preserves exit status and diagnostics. "
+    "Tool absent, "
     "real failure, or a read-only missing index: use the explicit short "
     "baseline fallback (bounded-search/direct reads or raw commands) and say "
     "so; never dismiss it as not needed. tgrep is experimental, not a default "
@@ -449,14 +459,100 @@ _AUTHORIZED_WORK = (
 )
 
 
+def _enforcement_extension() -> pathlib.Path:
+    """Resolve the owned Pi tool-routing extension, or fail explicitly."""
+    override = os.environ.get("V23_PI_EXTENSION")
+    if override and override.strip():
+        candidate = pathlib.Path(override).expanduser()
+        if not candidate.is_file() or candidate.is_symlink():
+            raise BridgeError(f"V23_PI_EXTENSION is not the owned extension file: {override}")
+        return candidate.resolve()
+    candidates = [
+        _codex_home() / PI_ENFORCEMENT_EXTENSION_RELATIVE,
+        _module_path().parent.parent / "package/pi/v23-enforce-tools.ts",
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate.resolve()
+    raise BridgeError(
+        "V23 Pi enforcement extension is missing; install the harness or set "
+        "V23_PI_EXTENSION to the owned extension file"
+    )
+
+
+def _task_bootstrap_helper() -> Any:
+    """Load the shared preflight helper in repo and installed layouts."""
+    try:
+        from scripts.task_bootstrap import preflight_codegraph
+
+        return preflight_codegraph
+    except ModuleNotFoundError:
+        harness = _codex_home() / "harness/v23"
+        if harness.is_dir() and str(harness) not in sys.path:
+            sys.path.insert(0, str(harness))
+        try:
+            from task_bootstrap import preflight_codegraph
+
+            return preflight_codegraph
+        except ModuleNotFoundError as exc:  # pragma: no cover - broken install
+            raise BridgeError(
+                "CodeGraph preflight helper is missing; reinstall the harness"
+            ) from exc
+
+
+def _validate_codegraph_declaration(
+    task_kind: str,
+    refresh: bool,
+    symbol: str | None,
+    query: str,
+) -> None:
+    """Validate the explicit task declaration; never classify the prompt."""
+    if task_kind not in TASK_KINDS:
+        raise BridgeError(f"unknown task kind {task_kind!r}")
+    focused = bool((symbol or "").strip() or (query or "").strip())
+    if task_kind == "general":
+        if refresh or focused:
+            raise BridgeError("CodeGraph options require --task-kind code or code-cross-file")
+        return
+    if task_kind == "code-cross-file" and not focused:
+        raise BridgeError(
+            "--task-kind code-cross-file requires --codegraph-symbol or --codegraph-query"
+        )
+
+
+def _codegraph_preflight(
+    cwd: pathlib.Path,
+    *,
+    writable: bool,
+    symbol: str | None,
+    query: str,
+) -> Any:
+    helper = _task_bootstrap_helper()
+    return helper(cwd, writable=writable, symbol=symbol, query=query)
+
+
+def _preflight_prompt(task_kind: str, result: Any) -> str:
+    if result is None:
+        return ""
+    state = "ok" if result.ok else "not ok; use the explicit short baseline fallback and say so"
+    return (
+        f"Declared task kind: {task_kind}. The adapter already ran the CodeGraph "
+        f"preflight before this session: {state}. Evidence: {result.detail}. Do not "
+        "repeat the same index status check; cross-check the cited current source "
+        "and say when freshness was reported unknown."
+    )
+
+
 def _bound_prompt(
     prompt: str,
     cwd: pathlib.Path,
     *,
     task_id: str,
     owned_paths: Sequence[str],
+    preflight: str = "",
 ) -> str:
     helper = _bounded_search_helper()
+    declaration = f"{preflight}\n" if preflight else ""
     return (
         "You are the selected external execution lead managed by Codex.\n"
         f"Authoritative working directory: {cwd}\n"
@@ -471,7 +567,8 @@ def _bound_prompt(
         "Timeout is 15 seconds. If the helper reports timeout or incomplete, narrow the "
         "scope and retry; never treat incomplete as no-match. Known individual-file reads "
         "may stay direct. Do not bypass with grep or Python recursive scans.\n"
-        f"{TOOL_SELECTION_GUIDANCE}\n\n"
+        f"{TOOL_SELECTION_GUIDANCE}\n"
+        f"{declaration}\n"
         "TASK\n"
         f"{prompt}"
     )
@@ -550,6 +647,8 @@ def _command(
     model: str,
     thinking: str,
     task_id: str,
+    extension: pathlib.Path,
+    rtk_log: pathlib.Path,
 ) -> list[str]:
     _validate_identity(provider, model, thinking)
     command = [
@@ -570,6 +669,10 @@ def _command(
         "--no-skills",
         "--no-prompt-templates",
         "--no-approve",
+        "-e",
+        str(extension),
+        "--v23-rtk-log",
+        str(rtk_log),
         "--tools",
         PI_TOOLS,
         f"@{prompt_file}",
@@ -984,11 +1087,27 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         thinking=thinking,
         session_dir=session_dir,
     )
+    extension = _enforcement_extension()
+    rtk_log = session_dir / f"{task_id}.rtk.jsonl"
+    task_kind = str(getattr(args, "task_kind", "general") or "general")
+    codegraph_refresh = bool(getattr(args, "codegraph_refresh", False))
+    codegraph_symbol = getattr(args, "codegraph_symbol", None)
+    codegraph_query = str(getattr(args, "codegraph_query", "") or "")
+    _validate_codegraph_declaration(task_kind, codegraph_refresh, codegraph_symbol, codegraph_query)
+    preflight_result: Any = None
+    if task_kind != "general":
+        preflight_result = _codegraph_preflight(
+            cwd,
+            writable=codegraph_refresh,
+            symbol=codegraph_symbol or None,
+            query=codegraph_query,
+        )
     bound = _bound_prompt(
         _prompt(args),
         cwd,
         task_id=task_id,
         owned_paths=owned_paths,
+        preflight=_preflight_prompt(task_kind, preflight_result),
     )
     prompt_path: pathlib.Path | None = None
     started = time.monotonic()
@@ -1003,6 +1122,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             model=model,
             thinking=thinking,
             task_id=task_id,
+            extension=extension,
+            rtk_log=rtk_log,
         )
         completed = _supervised_run(
             command,
@@ -1070,6 +1191,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "conversation_id": parsed["session_id"],
         "session_dir": str(session_dir),
         "events_path": str(events_path),
+        "enforcement_extension": str(extension),
+        "rtk_log": str(rtk_log),
+        "task_kind": task_kind,
+        "codegraph_preflight": (
+            None
+            if preflight_result is None
+            else {"ok": bool(preflight_result.ok), "detail": str(preflight_result.detail)}
+        ),
         "continued": args.session is not None,
         "wall_seconds": round(wall_seconds, 6),
         "usage": parsed["usage"],
@@ -1093,11 +1222,19 @@ def _batch_task(value: Any) -> argparse.Namespace:
         "thinking",
         "session_dir",
     }
-    allowed = required | {"effort", "timeout"}
+    allowed = required | {
+        "effort",
+        "timeout",
+        "task_kind",
+        "codegraph_refresh",
+        "codegraph_symbol",
+        "codegraph_query",
+    }
     if set(value) - allowed or not required.issubset(value):
         raise BridgeError(
             "batch task fields must be id, cwd, prompt, owned_paths, provider, model, "
-            "thinking, session_dir, effort, timeout"
+            "thinking, session_dir, effort, timeout, and optional task_kind, "
+            "codegraph_refresh, codegraph_symbol, codegraph_query"
         )
     task_id = value["id"]
     if not isinstance(task_id, str) or not task_id.strip():
@@ -1139,6 +1276,10 @@ def _batch_task(value: Any) -> argparse.Namespace:
         timeout=timeout,
         task_id=task_id,
         owned_path=value["owned_paths"],
+        task_kind=value.get("task_kind", "general"),
+        codegraph_refresh=bool(value.get("codegraph_refresh", False)),
+        codegraph_symbol=value.get("codegraph_symbol"),
+        codegraph_query=value.get("codegraph_query", ""),
     )
 
 
@@ -1244,6 +1385,22 @@ def _add_execution_arguments(parser: argparse.ArgumentParser, *, resume: bool) -
     prompt.add_argument("--prompt-file")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--owned-path", action="append", required=True)
+    parser.add_argument(
+        "--task-kind",
+        choices=tuple(sorted(TASK_KINDS)),
+        default="general",
+        help=(
+            "explicit task declaration (default general, no preflight); code kinds run "
+            "the owner CodeGraph preflight before Pi starts"
+        ),
+    )
+    parser.add_argument(
+        "--codegraph-refresh",
+        action="store_true",
+        help="allow the declared code preflight to init/sync the owner index",
+    )
+    parser.add_argument("--codegraph-symbol", help="focused symbol for a callers preflight")
+    parser.add_argument("--codegraph-query", help="focused query for a declared code preflight")
     if resume:
         parser.add_argument("--session", required=True)
         parser.add_argument("--receipt", required=True)

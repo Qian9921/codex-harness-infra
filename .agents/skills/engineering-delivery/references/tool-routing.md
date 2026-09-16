@@ -12,7 +12,7 @@ kind and questions, and say when a fallback was used.
 | Insufficient bounded keywords for an unknown implementation | Optional focused Semble in a known repo/module; inspect the cited files. Query echo is not an answer. |
 | Compact supported pytest summary | `rtk pytest <args>` when that route is verified. |
 | Exact JSON, porcelain, unified diff, or necessary raw diagnostic | Raw command; never route it through a summarizer. |
-| Missing or stale index | Create or refresh (`codegraph init`/`sync`) only in an authorized writable owner repository, judging freshness from the current tree rather than commit metadata alone. Read-only work does not refresh: trace with bounded-search and state the limit. |
+| Missing or stale index | Create or refresh (`codegraph init`/`sync`) only in an authorized writable owner repository, judging freshness from the current tree rather than commit metadata alone. A reported zero `pendingChanges` is not proof of freshness: CodeGraph has reported zero while `sync` then found added and modified files, so writable work syncs before relying on the index. Read-only work does not refresh: treat freshness as unknown, trace with bounded-search, and state the limit. |
 | Tool absent, real failure, or read-only missing index | Explicit short baseline fallback (bounded-search/direct reads or raw commands) and say so; never report it as "not needed". |
 
 Recursive content search MUST use the installed Harness helper
@@ -36,14 +36,20 @@ codegraph impact -p <repo> --json <symbol>
 ```
 
 `status` takes a positional path, not `-p`. The declared state is not proof the
-graph matches the tree: refresh only with authorized write in the owner
-checkout and still open the cited current files. The cache is Git-local through
-the V23-marked info/exclude block; no daemon and no global registry.
+graph matches the tree: a zero `pendingChanges` can hide added or modified
+files, so refresh with `sync` in the authorized writable owner checkout before
+relying on it and still open the cited current files. Read-only work treats
+freshness as unknown and does not refresh. The cache is Git-local through the
+V23-marked info/exclude block; no daemon and no global registry.
 
-The Harness verifies `rtk git`, `rtk ls`, and `rtk pytest` help before routing
-any of them, so RTK routes only that finite verified supported set. Other RTK
-commands and exact-format diagnostics stay raw and preserve exit status and
-diagnostics.
+The Harness verifies `rtk git`, `rtk ls`, and `rtk pytest` help and then
+dispatches the pytest route, so RTK routes only that finite verified supported
+set. The explicitly loaded owned Pi extension routes plain `pytest` and
+`python -m pytest` through `rtk pytest` by default; exact JSON, porcelain,
+diffs, and necessary raw diagnostics stay raw, unsupported compound shell
+syntax is never silently rewritten, a missing rtk falls back to the explicit
+raw command, and a routed failure preserves exit status and diagnostics. Other
+RTK commands and exact-format diagnostics stay raw.
 
 Optional tools are resolved from the configured `[tools]` path or PATH via
 `command -v`. Missing, failed, or unsupported tools fall back to baseline
