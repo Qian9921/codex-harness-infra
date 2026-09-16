@@ -303,6 +303,57 @@ def _jsonl_error_detail(events: Sequence[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _terminal_error_detail(events: Sequence[dict[str, Any]]) -> str:
+    """Return provider error text from the terminal assistant message only.
+
+    An intermediate stop-reason error can be followed by a successful
+    auto-retry, and assistant prose can quote unrelated provider failures, so
+    only the last assistant message with stop reason ``error`` is a terminal
+    provider diagnostic.
+    """
+    assistants = _assistant_message_ends(events)
+    if not assistants:
+        return ""
+    message = assistants[-1]
+    if message.get("stopReason") != "error":
+        return ""
+    parts: list[str] = []
+    error_message = message.get("errorMessage")
+    if isinstance(error_message, str) and error_message.strip():
+        parts.append(error_message)
+    text = _assistant_text(message)
+    if text.strip():
+        parts.append(text)
+    return "\n".join(parts)
+
+
+def _quota_failure_detail(
+    *,
+    returncode: int,
+    stderr: str,
+    stdout: str,
+    events: Sequence[dict[str, Any]] | None,
+) -> str:
+    """Collect only diagnostics that may authorize a quota fallback.
+
+    A nonzero exit exposes a genuine failing-process diagnostic (stderr, or
+    raw stdout when it is not a JSONL transcript). A structured terminal
+    provider error counts on any exit code. Successful stdout, normal
+    assistant prose, user prompts, and toolResult content never count.
+    """
+    parts: list[str] = []
+    if returncode != 0:
+        if stderr.strip():
+            parts.append(stderr.strip())
+        elif events is None and stdout.strip():
+            parts.append(stdout.strip())
+    if events is not None:
+        terminal = _terminal_error_detail(events)
+        if terminal:
+            parts.append(terminal)
+    return "\n".join(parts)
+
+
 def _owned_paths(cwd: pathlib.Path, values: Sequence[str]) -> list[str]:
     owned: list[str] = []
     for value in values:
@@ -965,7 +1016,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         except BridgeError:
             events = None
     detail = "\n".join(part for part in ((stderr or stdout).strip(), jsonl_detail) if part)
-    if _is_quota_exhaustion(detail):
+    quota_detail = _quota_failure_detail(
+        returncode=completed.returncode,
+        stderr=stderr,
+        stdout=stdout,
+        events=events,
+    )
+    if _is_quota_exhaustion(quota_detail):
         raise QuotaExhausted(
             "account quota is exhausted",
             _quota_receipt(
