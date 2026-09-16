@@ -1018,7 +1018,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             if isinstance(tools, dict) and any(tools.get(name) for name in REQUIRED_TOOLS):
                 print("Bounded install/migration tool check (never upgrades):")
                 for result in probe_tool_versions(tools):
-                    status = "ok" if result.ok else "failed"
+                    if result.ok:
+                        status = "ok"
+                    elif result.status == "skipped":
+                        status = "skipped"
+                    else:
+                        status = "failed"
                     print(f"  {result.name}: {status}: {result.detail}")
         else:
             for line in uninstall(args.codex_home, args.state_dir):

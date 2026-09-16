@@ -1392,9 +1392,14 @@ rtk = "not-a-real-rtk-binary"
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("Bounded install/migration tool check (never upgrades)", completed.stdout)
-            self.assertIn("CodeGraph version: failed: not configured", completed.stdout)
             self.assertIn(
-                "Semble version: failed: unknown: not configured; version not verified",
+                "CodeGraph version: failed: configured executable unavailable: "
+                "not-a-real-codegraph-binary; version not verified",
+                completed.stdout,
+            )
+            self.assertIn(
+                "Semble version: failed: unknown: configured executable unavailable: "
+                "not-a-real-semble-binary; version not verified",
                 completed.stdout,
             )
             self.assertNotIn("codegraph upgrade", completed.stdout)

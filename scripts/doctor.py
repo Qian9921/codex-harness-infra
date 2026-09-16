@@ -48,8 +48,11 @@ except ModuleNotFoundError:  # Support the documented `python scripts/doctor.py`
     )
 
 
-def _result(name: str, ok: bool, detail: str) -> dict[str, object]:
-    return {"name": name, "ok": ok, "detail": detail}
+def _result(name: str, ok: bool, detail: str, *, status: str | None = None) -> dict[str, object]:
+    record: dict[str, object] = {"name": name, "ok": ok, "detail": detail}
+    if status is not None:
+        record["status"] = status
+    return record
 
 
 def _github_login(config_dir: str) -> tuple[bool, str]:
@@ -189,7 +192,10 @@ def doctor(
         for result in version_results:
             checks.append(
                 _result(
-                    f"tool_{result.name.casefold().replace(' ', '_')}", result.ok, result.detail
+                    f"tool_{result.name.casefold().replace(' ', '_')}",
+                    result.ok,
+                    result.detail,
+                    status=getattr(result, "status", "") or None,
                 )
             )
     if check_github:
@@ -281,7 +287,9 @@ def doctor(
                         )
                     )
     return {
-        "ok": all(bool(check["ok"]) for check in checks),
+        # Optional tools that are genuinely absent are reported as skipped and
+        # excluded from readiness; they are not success claims and not failures.
+        "ok": all(bool(check["ok"]) for check in checks if check.get("status") != "skipped"),
         "active_global_instruction": str(effective_global_instruction(codex_home)),
         "project_instruction_candidates": _agent_chain(project),
         "primary_profile_start": "codex --profile v23-primary",

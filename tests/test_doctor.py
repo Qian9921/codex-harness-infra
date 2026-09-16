@@ -459,7 +459,10 @@ rtk = "rtk"
                     ToolResult("CodeGraph update", True, "update check unavailable (offline)"),
                     ToolResult("RTK version", True, "0.44.1"),
                     ToolResult(
-                        "Semble version", False, "unknown: not configured; version not verified"
+                        "Semble version",
+                        False,
+                        "unknown: not configured; version skipped",
+                        status="skipped",
                     ),
                 ]
 
@@ -475,9 +478,11 @@ rtk = "rtk"
             checks = {check["name"]: check for check in report["checks"]}
             self.assertTrue(seen)
             self.assertNotIn("semble", seen[0])
+            self.assertTrue(report["ok"])
             self.assertTrue(checks["tool_codegraph_version"]["ok"])
             self.assertTrue(checks["tool_rtk_version"]["ok"])
             self.assertFalse(checks["tool_semble_version"]["ok"])
+            self.assertEqual(checks["tool_semble_version"]["status"], "skipped")
             self.assertIn("unknown", str(checks["tool_semble_version"]["detail"]))
 
     def test_github_write_without_identities_is_unready(self) -> None:

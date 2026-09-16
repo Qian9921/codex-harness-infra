@@ -120,6 +120,7 @@ class ToolResult:
     name: str
     ok: bool
     detail: str
+    status: str = ""
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,33 @@ def _resolve_executable(value: object) -> str | None:
     if path.is_file():
         return str(path.resolve())
     return shutil.which(candidate)
+
+
+def _resolve_configured_tool(
+    env_var: str, configured: object, fallback_name: str
+) -> tuple[str | None, str | None]:
+    """Resolve a tool path: env override, then configured value, then PATH.
+
+    PATH is consulted only when neither an env override nor a configured value
+    is present. A set-but-unusable value returns an explicit reason instead of
+    silently falling through, so a broken configuration cannot masquerade as an
+    absent tool.
+    """
+    override = os.environ.get(env_var)
+    if isinstance(override, str) and override.strip():
+        resolved = _resolve_executable(override)
+        if resolved:
+            return resolved, None
+        return None, f"configured {fallback_name} override is unavailable: {_compact(override)}"
+    if isinstance(configured, str) and configured.strip():
+        resolved = _resolve_executable(configured)
+        if resolved:
+            return resolved, None
+        return (
+            None,
+            f"configured {fallback_name} executable is unavailable: {_compact(configured)}",
+        )
+    return _resolve_executable(fallback_name), None
 
 
 def _git_root(cwd: Path, runner: CommandRunner) -> Path | None:
@@ -539,6 +567,7 @@ def preflight_codegraph(
     symbol: str | None = None,
     query: str = "",
     runner: CommandRunner | None = None,
+    codegraph: object = None,
 ) -> ToolResult:
     """Explicit code-task preflight: owner index before exploration, CodeGraph only.
 
@@ -547,14 +576,17 @@ def preflight_codegraph(
     authorized owner repository and treats a zero pending count as no proof of
     freshness; a read-only preflight never writes and reports freshness as
     unknown. A structural ``symbol`` or focused ``query`` is passed through to
-    the same owned index helper used by Doctor.
+    the same owned index helper used by Doctor. ``codegraph`` is the optional
+    ``[tools].codegraph`` value from the local configuration; resolution order
+    is ``V23_CODEGRAPH_BIN``, then the configured value, then ``codegraph``
+    from PATH only when unconfigured.
     """
     runner = runner or _system_runner
     cwd = cwd.resolve()
     root = _git_root(cwd, runner)
-    executable = _resolve_executable(os.environ.get("V23_CODEGRAPH_BIN")) or _resolve_executable(
-        "codegraph"
-    )
+    executable, unresolved = _resolve_configured_tool("V23_CODEGRAPH_BIN", codegraph, "codegraph")
+    if unresolved:
+        return ToolResult("CodeGraph", False, f"{unresolved}; baseline bounded-search/direct reads")
     return _codegraph_result(
         executable,
         root,
@@ -597,14 +629,35 @@ def probe_tool_versions(
     """Explicit install/migration maintenance: bounded versions and update check.
 
     Never upgrades, starts no daemon, and reports an offline or unsupported
-    update check honestly instead of treating it as a tool failure.
+    update check honestly instead of treating it as a tool failure. A tool
+    absent from the optional configuration is reported as ``skipped`` so an
+    optional absence does not fail the readiness aggregate, while a configured
+    but unusable executable stays a real failure.
     """
     runner = runner or _system_runner
     results: list[ToolResult] = []
     for key, label in (("codegraph", "CodeGraph"), ("rtk", "RTK")):
-        executable = _resolve_executable(tools.get(key))
+        configured = tools.get(key)
+        executable = _resolve_executable(configured)
         if not executable:
-            results.append(ToolResult(f"{label} version", False, "not configured"))
+            if isinstance(configured, str) and configured.strip():
+                results.append(
+                    ToolResult(
+                        f"{label} version",
+                        False,
+                        f"configured executable unavailable: {_compact(configured)}; "
+                        "version not verified",
+                    )
+                )
+            else:
+                results.append(
+                    ToolResult(
+                        f"{label} version",
+                        False,
+                        "not configured; version skipped",
+                        status="skipped",
+                    )
+                )
             continue
         ok, detail = _run((executable, "--version"), None, runner, RTK_TIMEOUT_SECONDS)
         results.append(
@@ -614,11 +667,27 @@ def probe_tool_versions(
                 detail if ok else f"version probe failed: {detail}",
             )
         )
-    semble = _resolve_executable(tools.get("semble"))
+    configured = tools.get("semble")
+    semble = _resolve_executable(configured)
     if not semble:
-        results.append(
-            ToolResult("Semble version", False, "unknown: not configured; version not verified")
-        )
+        if isinstance(configured, str) and configured.strip():
+            results.append(
+                ToolResult(
+                    "Semble version",
+                    False,
+                    "unknown: configured executable unavailable: "
+                    f"{_compact(configured)}; version not verified",
+                )
+            )
+        else:
+            results.append(
+                ToolResult(
+                    "Semble version",
+                    False,
+                    "unknown: not configured; version skipped",
+                    status="skipped",
+                )
+            )
     else:
         checked, detail = _run((semble, "--version"), None, runner, RTK_TIMEOUT_SECONDS)
         results.append(

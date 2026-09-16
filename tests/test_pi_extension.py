@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -34,6 +35,24 @@ with open(os.environ["V23_RTK_STUB_LOG"], "a", encoding="utf-8") as handle:
     handle.write(json.dumps(sys.argv[1:]) + "\\n")
 raise SystemExit(int(os.environ.get("V23_RTK_STUB_EXIT", "0")))
 """
+
+RAW_STUB_SOURCE = """#!{python}
+import json
+import os
+import sys
+
+invoked = sys.argv[0]
+bin_dir = os.environ.get("V23_RAW_STUB_BIN", "")
+if bin_dir and os.path.dirname(invoked) == bin_dir:
+    invoked = os.path.basename(invoked)
+with open(os.environ["V23_RAW_STUB_LOG"], "a", encoding="utf-8") as handle:
+    handle.write(json.dumps([invoked, *sys.argv[1:]]) + "\\n")
+"""
+
+
+def _write_raw_stub(path: Path) -> None:
+    path.write_text(RAW_STUB_SOURCE.format(python=sys.executable), encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _executable(value: str | None) -> str | None:
@@ -78,14 +97,24 @@ class PiExtensionSmokeTests(unittest.TestCase):
         commands: list[str],
         stub_exit: int = 0,
         rtk_absent: bool = False,
+        rtk_broken: bool = False,
         extension: Path = EXTENSION,
-    ) -> tuple[subprocess.CompletedProcess[str], list[list[str]], list[dict]]:
+    ) -> tuple[subprocess.CompletedProcess[str], list[list[str]], list[list[str]], list[dict]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             work = root / "work"
             work.mkdir()
             home = root / "home"
             home.mkdir()
+            raw_log = root / "raw-argv.jsonl"
+            raw_bin = work / "bin"
+            raw_bin.mkdir()
+            for name in ("pytest", "git", "python", "python3.11", "pytest3"):
+                _write_raw_stub(raw_bin / name)
+            venv_bin = work / ".venv/bin"
+            venv_bin.mkdir(parents=True)
+            for name in ("python", "pytest"):
+                _write_raw_stub(venv_bin / name)
             stub = work / "rtk-stub"
             stub.write_text(STUB_SOURCE.format(python=sys.executable), encoding="utf-8")
             stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -101,15 +130,20 @@ class PiExtensionSmokeTests(unittest.TestCase):
                 "V23_MOCK_TRIGGER": "v23-smoke",
                 "V23_RTK_STUB_LOG": str(stub_log),
                 "V23_RTK_STUB_EXIT": str(stub_exit),
+                "V23_RAW_STUB_LOG": str(raw_log),
+                "V23_RAW_STUB_BIN": str(raw_bin),
+                "PATH": f"{raw_bin}{os.pathsep}{os.environ.get('PATH', '')}",
             }
-            if rtk_absent:
-                bin_dir = root / "bin"
-                bin_dir.mkdir()
-                (bin_dir / "node").symlink_to(self.node)
-                env["PATH"] = str(bin_dir)
+            if rtk_absent or rtk_broken:
+                node_dir = root / "node-bin"
+                node_dir.mkdir()
+                (node_dir / "node").symlink_to(self.node)
+                env["PATH"] = f"{raw_bin}{os.pathsep}{node_dir}"
                 env.pop("V23_RTK_BIN", None)
             else:
                 env["V23_RTK_BIN"] = str(stub)
+            if rtk_broken:
+                env["V23_RTK_BIN"] = str(root / "missing-rtk")
             command = [
                 self.pi,
                 "--provider",
@@ -153,8 +187,15 @@ class PiExtensionSmokeTests(unittest.TestCase):
                 )
                 if line.strip()
             ]
+            raw_calls = [
+                json.loads(line)
+                for line in (
+                    raw_log.read_text(encoding="utf-8").splitlines() if raw_log.exists() else []
+                )
+                if line.strip()
+            ]
             records = _read_jsonl(rtk_log)
-        return completed, stub_calls, records
+        return completed, stub_calls, raw_calls, records
 
     def test_installed_extension_is_the_one_pi_loads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -173,7 +214,7 @@ class PiExtensionSmokeTests(unittest.TestCase):
                 os.environ, {"CODEX_HOME": str(codex_home), "V23_PI_EXTENSION": ""}, clear=False
             ):
                 self.assertEqual(grok_execution._enforcement_extension(), installed.resolve())
-            completed, stub_calls, records = self._run_pi(
+            completed, stub_calls, _raw_calls, records = self._run_pi(
                 commands=["pytest -q installed.py"], extension=installed
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -183,7 +224,7 @@ class PiExtensionSmokeTests(unittest.TestCase):
         self.assertIn("installed.py", str(routes[0]["command"]))
 
     def test_real_pi_routes_pytest_and_keeps_raw_commands_raw(self) -> None:
-        completed, stub_calls, records = self._run_pi(
+        completed, stub_calls, _raw_calls, records = self._run_pi(
             commands=[
                 'pytest -q "test file.py"',
                 "git diff --stat",
@@ -213,7 +254,7 @@ class PiExtensionSmokeTests(unittest.TestCase):
         self.assertEqual(results[0]["kind"], "routed")
 
     def test_real_pi_states_explicit_fallback_when_rtk_is_absent(self) -> None:
-        completed, stub_calls, records = self._run_pi(
+        completed, stub_calls, _raw_calls, records = self._run_pi(
             commands=["pytest -q"],
             rtk_absent=True,
         )
@@ -224,6 +265,162 @@ class PiExtensionSmokeTests(unittest.TestCase):
         self.assertIn("rtk-not-found", fallbacks[0]["reason"])
         self.assertNotIn("rtk-route", [record.get("event") for record in records])
         self.assertIn("rtk unavailable", completed.stdout)
+
+    def test_real_pi_reports_configured_rtk_unavailable_without_path_fallback(self) -> None:
+        completed, stub_calls, raw_calls, records = self._run_pi(
+            commands=["pytest -q"], rtk_broken=True
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(stub_calls, [])
+        self.assertEqual(raw_calls, [["pytest", "-q"]], records)
+        fallbacks = [record for record in records if record.get("event") == "rtk-fallback"]
+        self.assertEqual(len(fallbacks), 1, records)
+        self.assertIn("configured-rtk-unavailable", fallbacks[0]["reason"])
+        self.assertNotIn("rtk-route", [record.get("event") for record in records])
+        self.assertIn("rtk unavailable", completed.stdout)
+
+    def test_real_pi_keeps_multiline_commands_raw(self) -> None:
+        completed, stub_calls, raw_calls, records = self._run_pi(
+            commands=[
+                "pytest -q\ngit status",
+                "pytest -q\r\ngit status",
+                "pytest \\\n-q",
+            ],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(stub_calls, [])
+        self.assertEqual(
+            Counter(map(tuple, raw_calls)),
+            Counter(
+                map(
+                    tuple,
+                    [
+                        ["pytest", "-q"],
+                        ["git", "status"],
+                        ["pytest", "-q\r"],
+                        ["git", "status"],
+                        ["pytest", "-q"],
+                    ],
+                )
+            ),
+            records,
+        )
+        self.assertEqual([record for record in records if record.get("event") == "rtk-route"], [])
+        reasons = [
+            record.get("reason") for record in records if record.get("event") == "rtk-raw-exception"
+        ]
+        self.assertEqual(reasons.count("multiline-command-stays-raw"), 3, records)
+
+    def test_real_pi_preserves_double_quoted_backslashes(self) -> None:
+        completed, stub_calls, raw_calls, records = self._run_pi(
+            commands=[
+                'pytest "tests\\foo" -q',
+                'pytest -k "test\\w+"',
+                'pytest "C:\\\\path" -q',
+            ],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            stub_calls,
+            [
+                ["pytest", "tests\\foo", "-q"],
+                ["pytest", "-k", "test\\w+"],
+                ["pytest", "C:\\path", "-q"],
+            ],
+            records,
+        )
+        self.assertEqual(raw_calls, [], records)
+        routes = [record for record in records if record.get("event") == "rtk-route"]
+        self.assertEqual(len(routes), 3, records)
+
+    def test_real_pi_leaves_non_bare_pytest_selections_raw(self) -> None:
+        completed, stub_calls, raw_calls, records = self._run_pi(
+            commands=[
+                "python -m pytest -q",
+                "python3.11 -m pytest -q",
+                ".venv/bin/python -m pytest -q",
+                "pytest3 -q",
+                ".venv/bin/pytest -q",
+            ],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(stub_calls, [])
+        self.assertEqual(
+            Counter(map(tuple, raw_calls)),
+            Counter(
+                map(
+                    tuple,
+                    [
+                        ["python", "-m", "pytest", "-q"],
+                        ["python3.11", "-m", "pytest", "-q"],
+                        [".venv/bin/python", "-m", "pytest", "-q"],
+                        ["pytest3", "-q"],
+                        [".venv/bin/pytest", "-q"],
+                    ],
+                )
+            ),
+            records,
+        )
+        self.assertEqual([record for record in records if record.get("event") == "rtk-route"], [])
+        reasons = {
+            record.get("reason") for record in records if record.get("event") == "rtk-raw-exception"
+        }
+        self.assertEqual(
+            reasons,
+            {
+                "python-m-pytest-may-select-a-different-interpreter",
+                "explicit-interpreter-path-stays-raw",
+                "pytest3-stays-raw",
+                "explicit-pytest-path-stays-raw",
+            },
+            records,
+        )
+
+    def test_real_pi_keeps_value_joined_diagnostics_and_help_raw(self) -> None:
+        completed, stub_calls, raw_calls, records = self._run_pi(
+            commands=[
+                "pytest --junitxml=out.xml -q",
+                "pytest --junitxml out.xml -q",
+                "pytest --junit-xml=out.xml -q",
+                "pytest --json-report-file=out.json -q",
+                "pytest --tb long -q",
+                "pytest --tb=native -q",
+                "pytest --capture=no -q",
+                "pytest --help",
+                "pytest -h",
+                "pytest --version",
+            ],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(stub_calls, [])
+        self.assertEqual(
+            Counter(map(tuple, raw_calls)),
+            Counter(
+                map(
+                    tuple,
+                    [
+                        ["pytest", "--junitxml=out.xml", "-q"],
+                        ["pytest", "--junitxml", "out.xml", "-q"],
+                        ["pytest", "--junit-xml=out.xml", "-q"],
+                        ["pytest", "--json-report-file=out.json", "-q"],
+                        ["pytest", "--tb", "long", "-q"],
+                        ["pytest", "--tb=native", "-q"],
+                        ["pytest", "--capture=no", "-q"],
+                        ["pytest", "--help"],
+                        ["pytest", "-h"],
+                        ["pytest", "--version"],
+                    ],
+                )
+            ),
+            records,
+        )
+        self.assertEqual([record for record in records if record.get("event") == "rtk-route"], [])
+        raw_reasons = [
+            record.get("reason") for record in records if record.get("event") == "rtk-raw-exception"
+        ]
+        self.assertEqual(
+            raw_reasons.count("exact-format-or-diagnostic-flags-stay-raw"), 10, records
+        )
 
 
 if __name__ == "__main__":

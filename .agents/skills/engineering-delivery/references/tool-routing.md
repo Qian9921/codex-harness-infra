@@ -44,15 +44,21 @@ V23-marked info/exclude block; no daemon and no global registry.
 
 The Harness verifies `rtk git`, `rtk ls`, and `rtk pytest` help and then
 dispatches the pytest route, so RTK routes only that finite verified supported
-set. The explicitly loaded owned Pi extension routes plain `pytest` and
-`python -m pytest` through `rtk pytest` by default; exact JSON, porcelain,
+set. The explicitly loaded owned Pi extension routes bare `pytest` through
+`rtk pytest` by default; `python -m pytest`, `pytest3`, and explicit
+interpreter or pytest paths stay raw because that route does not prove it
+preserves the selected executable. Exact JSON, porcelain,
 diffs, and necessary raw diagnostics stay raw, unsupported compound shell
 syntax is never silently rewritten, a missing rtk falls back to the explicit
 raw command, and a routed failure preserves exit status and diagnostics. Other
 RTK commands and exact-format diagnostics stay raw.
 
-Optional tools are resolved from the configured `[tools]` path or PATH via
-`command -v`. Missing, failed, or unsupported tools fall back to baseline
+Optional tools resolve from the `V23_*` override, then the configured `[tools]`
+path, then PATH via `command -v` only when unconfigured. The bridge reads the
+local config (`--local-config`, else the installed
+`${CODEX_HOME}/harness/v23/local.toml`, else `~/.config/codex-harness/local.toml`)
+and propagates `[tools].rtk` to the Pi child as `V23_RTK_BIN`. Missing, failed,
+or unsupported tools fall back to baseline
 without repeated repair. Do not scan home, tmp, or workspace trees or internal
 tool databases merely to discover setup. Availability checking is not required
 on every task. tgrep is experimental, not a default backend, and is not

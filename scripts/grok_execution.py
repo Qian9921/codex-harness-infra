@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import Sequence
 from typing import Any
 
@@ -27,6 +28,9 @@ PI_TOOLS = "read,bash,edit,write"
 TASK_KINDS = frozenset({"general", "code", "code-cross-file"})
 # Owned Pi extension loaded explicitly together with ``--no-extensions``.
 PI_ENFORCEMENT_EXTENSION_RELATIVE = "harness/v23/pi/v23-enforce-tools.ts"
+# Installed local config, then the documented install/doctor default.
+LOCAL_CONFIG_RELATIVE = "harness/v23/local.toml"
+DEFAULT_LOCAL_CONFIG_RELATIVE = ".config/codex-harness/local.toml"
 TASK_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 SCHEMA = "codex-external-execution.v1"
 BATCH_SCHEMA = "codex-external-execution-batch.v1"
@@ -425,7 +429,9 @@ TOOL_SELECTION_GUIDANCE = (
     "then inspect the cited files; Semble stays optional and query echo is not "
     "an answer. RTK routes only the finite verified supported set (for example "
     "`rtk pytest <args>` compact test summaries). The owned Pi extension routes "
-    "plain `pytest` and `python -m pytest` through `rtk pytest` by default; "
+    "bare `pytest` through `rtk pytest` by default; `python -m pytest`, "
+    "`pytest3`, and explicit interpreter or pytest paths stay raw because that "
+    "route does not prove it preserves the selected executable. "
     "exact JSON, porcelain, unified diffs, and necessary raw diagnostics are "
     "explicit raw exceptions, unsupported compound shell syntax is never "
     "silently rewritten, an absent or failed rtk falls back to the explicit "
@@ -437,8 +443,9 @@ TOOL_SELECTION_GUIDANCE = (
     "backend, and is not installed by this Harness; a user may already have it "
     "independently. Unknown or version-different commands: inspect that "
     "binary's --help, then fall back to baseline. Resolve an optional tool "
-    "only from its configured path or PATH via `command -v`; if unavailable, "
-    "use baseline. Do not scan home, tmp, or workspace trees, or inspect "
+    "from its configured `[tools]` path, the V23_* override, or PATH via "
+    "`command -v`; if unavailable, use baseline. Do not scan home, tmp, or "
+    "workspace trees, or inspect "
     "internal tool databases, merely to discover setup. After sufficient "
     "evidence, do not probe again; availability checking is not required on "
     "every task. Optional tools are selected only for a concrete need, "
@@ -478,6 +485,50 @@ def _enforcement_extension() -> pathlib.Path:
         "V23 Pi enforcement extension is missing; install the harness or set "
         "V23_PI_EXTENSION to the owned extension file"
     )
+
+
+def _local_config_path(args: argparse.Namespace) -> pathlib.Path | None:
+    """Resolve the local config: explicit flag, installed candidate, then default."""
+    override = getattr(args, "local_config", None)
+    if isinstance(override, (str, pathlib.Path)) and str(override).strip():
+        return pathlib.Path(override).expanduser()
+    candidates = (
+        _codex_home() / LOCAL_CONFIG_RELATIVE,
+        pathlib.Path.home() / DEFAULT_LOCAL_CONFIG_RELATIVE,
+    )
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        return candidate.resolve()
+    return None
+
+
+def _configured_tools(args: argparse.Namespace) -> dict[str, str]:
+    """Read only ``[tools].codegraph``/``[tools].rtk``; never echo the file."""
+    path = _local_config_path(args)
+    if path is None:
+        return {}
+    try:
+        loaded = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    tools = loaded.get("tools") if isinstance(loaded, dict) else None
+    if not isinstance(tools, dict):
+        return {}
+    configured: dict[str, str] = {}
+    for name in ("codegraph", "rtk"):
+        value = tools.get(name)
+        if isinstance(value, str) and value.strip():
+            configured[name] = value.strip()
+    return configured
+
+
+def _tools_child_env(tools: dict[str, str]) -> dict[str, str] | None:
+    """Propagate only the configured RTK path into the Pi child environment."""
+    rtk = tools.get("rtk")
+    if not rtk:
+        return None
+    return {**os.environ, "V23_RTK_BIN": rtk}
 
 
 def _task_bootstrap_helper() -> Any:
@@ -526,9 +577,16 @@ def _codegraph_preflight(
     writable: bool,
     symbol: str | None,
     query: str,
+    codegraph: str | None = None,
 ) -> Any:
     helper = _task_bootstrap_helper()
-    return helper(cwd, writable=writable, symbol=symbol, query=query)
+    return helper(
+        cwd,
+        writable=writable,
+        symbol=symbol,
+        query=query,
+        codegraph=codegraph,
+    )
 
 
 def _preflight_prompt(task_kind: str, result: Any) -> str:
@@ -816,13 +874,16 @@ class _SpawnCleanupToken:
             pass
 
 
-def _spawn_grok(command: Sequence[str], cwd: pathlib.Path) -> subprocess.Popen[str]:
+def _spawn_grok(
+    command: Sequence[str], cwd: pathlib.Path, *, env: dict[str, str] | None = None
+) -> subprocess.Popen[str]:
     proc = subprocess.Popen(
         _child_launcher_argv(command),
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
         start_new_session=True,
     )
     proc._v23_cleanup_token = _SpawnCleanupToken(proc)
@@ -964,6 +1025,7 @@ def _supervised_run(
     cwd: pathlib.Path,
     *,
     timeout: int | None,
+    env: dict[str, str] | None = None,
     spawn: Any = _spawn_grok,
     is_alive: Any = default_is_alive,
     is_zombie: Any = default_is_zombie,
@@ -980,7 +1042,7 @@ def _supervised_run(
         with _REGISTRY_LOCK:
             if _TERMINATING:
                 raise BridgeError("process is terminating")
-            proc = spawn(command, cwd)
+            proc = spawn(command, cwd) if env is None else spawn(command, cwd, env=env)
             if not hasattr(proc, "_v23_pgid") or getattr(proc, "_v23_pgid", None) is None:
                 _record_dedicated_pgid(proc)
             if not _owns_dedicated_group(proc):
@@ -1089,6 +1151,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     )
     extension = _enforcement_extension()
     rtk_log = session_dir / f"{task_id}.rtk.jsonl"
+    tools = _configured_tools(args)
     task_kind = str(getattr(args, "task_kind", "general") or "general")
     codegraph_refresh = bool(getattr(args, "codegraph_refresh", False))
     codegraph_symbol = getattr(args, "codegraph_symbol", None)
@@ -1101,6 +1164,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             writable=codegraph_refresh,
             symbol=codegraph_symbol or None,
             query=codegraph_query,
+            codegraph=tools.get("codegraph"),
         )
     bound = _bound_prompt(
         _prompt(args),
@@ -1129,6 +1193,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             command,
             cwd,
             timeout=_positive_timeout(getattr(args, "timeout", None)),
+            env=_tools_child_env(tools),
         )
     finally:
         if prompt_path is not None:
@@ -1368,6 +1433,16 @@ def _doctor(_args: argparse.Namespace) -> dict[str, Any]:
 
 def _add_execution_arguments(parser: argparse.ArgumentParser, *, resume: bool) -> None:
     parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument(
+        "--local-config",
+        type=pathlib.Path,
+        default=None,
+        help=(
+            "local TOML with optional [tools].codegraph/[tools].rtk paths; "
+            "defaults to ${CODEX_HOME}/harness/v23/local.toml, then "
+            "~/.config/codex-harness/local.toml"
+        ),
+    )
     parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument(

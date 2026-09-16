@@ -2,13 +2,16 @@
  * V23 owned Pi extension: finite RTK routing for the LLM `bash` tool.
  *
  * Loaded explicitly by the V23 bridge together with `--no-extensions`, so no
- * user extension discovery changes. Plain `pytest` and `python -m pytest`
- * commands are rewritten to the verified `rtk pytest` route before the
- * built-in bash tool executes them. Unsupported compound shell syntax is left
+ * user extension discovery changes. Bare `pytest` commands are rewritten to
+ * the verified `rtk pytest` route before the built-in bash tool executes them.
+ * `python -m pytest`, `pytest3`, and explicit interpreter or pytest paths stay
+ * raw because that route does not prove it preserves the selected executable.
+ * Multiline commands stay raw, unsupported compound shell syntax is left
  * untouched, exact JSON/porcelain/diff/diagnostic flags stay raw, and a
- * missing RTK executable falls back to the raw command with an explicit note
- * in the tool result and in the routing log. Exit status and diagnostics are
- * the built-in bash tool's own result; this extension never reruns a command.
+ * missing or unusable configured RTK executable falls back to the raw command
+ * with an explicit note in the tool result and in the routing log. Exit status
+ * and diagnostics are the built-in bash tool's own result; this extension
+ * never reruns a command.
  */
 
 import { appendFileSync, statSync } from "node:fs";
@@ -36,9 +39,26 @@ const RAW_EXCEPTION_ARGS = new Set([
 	"--co",
 	"--fixtures",
 	"--markers",
+	"--help",
+	"--version",
+	"-h",
 ]);
 
-const PYTHON_RE = /^python(?:3(?:\.\d+)?)?$/;
+/** Options whose separate-value and `=`-joined forms both stay raw. */
+const RAW_EXCEPTION_OPTIONS = new Set([
+	"--junitxml",
+	"--junit-xml",
+	"--xml",
+	"--json-report",
+	"--json-report-file",
+	"--tb",
+	"--capture",
+	"--log-file",
+	"--result-log",
+]);
+
+const PYTHON_RE = /^python(?:\d+(?:\.\d+)*)?$/;
+const PATHY_RE = /[/\\]/;
 
 interface RouteDecision {
 	route: string;
@@ -63,17 +83,17 @@ function isExecutableFile(path: string): boolean {
 	}
 }
 
-/** Resolve rtk from the configured override or PATH without scanning trees. */
-function resolveRtk(): string | null {
-	const explicit = process.env.V23_RTK_BIN;
-	if (explicit && isExecutableFile(explicit)) {
-		return explicit;
-	}
+interface RtkResolution {
+	executable: string | null;
+	reason: string;
+}
+
+function searchPath(name: string): string | null {
 	for (const directory of (process.env.PATH ?? "").split(delimiter)) {
 		if (!directory) {
 			continue;
 		}
-		const candidate = join(directory, "rtk");
+		const candidate = join(directory, name);
 		if (isExecutableFile(candidate)) {
 			return candidate;
 		}
@@ -82,11 +102,40 @@ function resolveRtk(): string | null {
 }
 
 /**
+ * Resolve rtk from the configured override or PATH without scanning trees.
+ * A configured `V23_RTK_BIN` is authoritative: when it is set but unusable,
+ * routing declines with an explicit reason instead of silently using PATH.
+ */
+function resolveRtk(): RtkResolution {
+	const explicit = (process.env.V23_RTK_BIN ?? "").trim();
+	if (explicit) {
+		if (isExecutableFile(explicit)) {
+			return { executable: explicit, reason: "" };
+		}
+		if (!PATHY_RE.test(explicit)) {
+			const found = searchPath(explicit);
+			if (found) {
+				return { executable: found, reason: "" };
+			}
+		}
+		return { executable: null, reason: `configured-rtk-unavailable: ${explicit}` };
+	}
+	const found = searchPath("rtk");
+	if (found) {
+		return { executable: found, reason: "" };
+	}
+	return { executable: null, reason: "rtk-not-found" };
+}
+
+/**
  * Tokenize one simple command. Returns null for anything the parser cannot
  * prove literal: shell operators, expansions, globs, redirections, comments,
  * substitutions, or an env-assignment prefix. A null result stays raw.
  */
 function parseSimpleCommand(command: string): string[] | null {
+	if (command.includes("\n") || command.includes("\r")) {
+		return null;
+	}
 	const tokens: string[] = [];
 	let current = "";
 	let started = false;
@@ -119,11 +168,19 @@ function parseSimpleCommand(command: string): string[] | null {
 					return null;
 				}
 				if (inner === "\\") {
-					if (index + 1 >= command.length) {
+					const escaped = command[index + 1];
+					if (escaped === undefined) {
 						return null;
 					}
-					current += command[index + 1];
-					index += 2;
+					if (escaped === "$" || escaped === "`" || escaped === '"' || escaped === "\\") {
+						current += escaped;
+						index += 2;
+					} else {
+						// POSIX double quotes keep a backslash before any other
+						// character literal; stripping it would change argv.
+						current += "\\";
+						index += 1;
+					}
 					continue;
 				}
 				current += inner;
@@ -143,7 +200,7 @@ function parseSimpleCommand(command: string): string[] | null {
 			index += 2;
 			continue;
 		}
-		if (/\s/.test(char)) {
+		if (char === " " || char === "\t") {
 			if (started) {
 				tokens.push(current);
 				current = "";
@@ -177,20 +234,51 @@ function basename(value: string): string {
 	return parts[parts.length - 1] ?? value;
 }
 
-/** Map a simple argv to the finite verified RTK pytest route, or null for raw. */
+/**
+ * Map a simple argv to the finite verified RTK pytest route, or null for raw.
+ * Only a bare literal `pytest` is proven to preserve the selected executable:
+ * `rtk pytest` has no interpreter argument, so any explicit interpreter or
+ * pytest path stays raw instead of silently switching environments.
+ */
 function routePytest(argv: string[]): RouteDecision | null {
-	const head = basename(argv[0]);
-	if (head === "pytest" || head === "pytest3") {
+	if (argv[0] === "pytest") {
 		return { route: "pytest", args: argv.slice(1) };
 	}
-	if (PYTHON_RE.test(head) && argv[1] === "-m" && argv[2] === "pytest") {
-		return { route: "pytest", args: argv.slice(3) };
+	return null;
+}
+
+/** Explain an explicit interpreter/pytest selection that stays raw. */
+function rawPytestReason(argv: string[]): string | null {
+	const head = argv[0] ?? "";
+	const name = basename(head);
+	const modulePytest = argv[1] === "-m" && argv[2] === "pytest";
+	if (PATHY_RE.test(head) && (name === "pytest" || name === "pytest3")) {
+		return "explicit-pytest-path-stays-raw";
+	}
+	if (PATHY_RE.test(head) && PYTHON_RE.test(name) && modulePytest) {
+		return "explicit-interpreter-path-stays-raw";
+	}
+	if (name === "pytest3" && !PATHY_RE.test(head)) {
+		return "pytest3-stays-raw";
+	}
+	if (PYTHON_RE.test(head) && modulePytest) {
+		return "python-m-pytest-may-select-a-different-interpreter";
 	}
 	return null;
 }
 
 function hasRawException(args: string[]): boolean {
-	return args.some((arg) => RAW_EXCEPTION_ARGS.has(arg));
+	return args.some((arg) => {
+		if (RAW_EXCEPTION_ARGS.has(arg)) {
+			return true;
+		}
+		for (const option of RAW_EXCEPTION_OPTIONS) {
+			if (arg === option || arg.startsWith(`${option}=`)) {
+				return true;
+			}
+		}
+		return false;
+	});
 }
 
 function shellQuote(arg: string): string {
@@ -243,12 +331,33 @@ export default function (pi: ExtensionAPI) {
 		if (typeof command !== "string" || !command.trim()) {
 			return;
 		}
+		if (command.includes("\n") || command.includes("\r")) {
+			// A multiline command has shell semantics the single-command parser
+			// cannot preserve; re-parsing it as one command would merge or drop
+			// separators, so it always stays raw.
+			appendLog(pi, {
+				event: "rtk-raw-exception",
+				toolCallId: event.toolCallId,
+				command,
+				reason: "multiline-command-stays-raw",
+			});
+			return;
+		}
 		const argv = parseSimpleCommand(command);
 		if (!argv) {
 			return;
 		}
 		const decision = routePytest(argv);
 		if (!decision) {
+			const reason = rawPytestReason(argv);
+			if (reason) {
+				appendLog(pi, {
+					event: "rtk-raw-exception",
+					toolCallId: event.toolCallId,
+					command,
+					reason,
+				});
+			}
 			return;
 		}
 		if (hasRawException(decision.args)) {
@@ -262,21 +371,21 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		const rtk = resolveRtk();
-		if (!rtk) {
+		if (!rtk.executable) {
 			pending.set(event.toolCallId, {
 				kind: "fallback",
 				original: command,
-				reason: "rtk-not-found",
+				reason: rtk.reason,
 			});
 			appendLog(pi, {
 				event: "rtk-fallback",
 				toolCallId: event.toolCallId,
 				command,
-				reason: "rtk-not-found; raw command executed",
+				reason: `${rtk.reason}; raw command executed`,
 			});
 			return;
 		}
-		const rewritten = renderCommand([rtk, decision.route, ...decision.args]);
+		const rewritten = renderCommand([rtk.executable, decision.route, ...decision.args]);
 		event.input.command = rewritten;
 		pending.set(event.toolCallId, {
 			kind: "routed",

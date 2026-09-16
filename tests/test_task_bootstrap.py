@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import ClassVar
+from unittest import mock
 
 from scripts.doctor import doctor
 from scripts.install import install
@@ -40,6 +41,7 @@ from scripts.task_bootstrap import (
     doctor_subset,
     local_installation_checks,
     parse_proc_net_unix,
+    preflight_codegraph,
     probe_tool_versions,
     probe_tools,
     render_live_state,
@@ -409,6 +411,7 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertTrue(verified["CodeGraph version"].ok)
             self.assertTrue(verified["CodeGraph update"].ok)
             self.assertFalse(verified["Semble version"].ok)
+            self.assertEqual(verified["Semble version"].status, "skipped")
             self.assertIn("unknown", verified["Semble version"].detail)
             codegraph_calls = [
                 command for command, _ in runner.calls if command[0] == tools["codegraph"]
@@ -437,6 +440,101 @@ class TaskBootstrapTests(unittest.TestCase):
             self.assertIn("offline", offline_results["CodeGraph update"].detail)
             self.assertIn("no auto-update", offline_results["CodeGraph update"].detail)
             self.assertTrue(offline_results["CodeGraph update"].ok)
+
+    def test_probe_tool_versions_marks_absent_optional_tools_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            runner = FakeRunner(root)
+
+            results = {result.name: result for result in probe_tool_versions({}, runner=runner)}
+
+            for name in ("CodeGraph version", "RTK version", "Semble version"):
+                self.assertEqual(results[name].status, "skipped", name)
+                self.assertFalse(results[name].ok, name)
+            self.assertEqual(runner.calls, [])
+
+    def test_probe_tool_versions_marks_configured_unavailable_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            runner = FakeRunner(root)
+
+            results = {
+                result.name: result
+                for result in probe_tool_versions(
+                    {"codegraph": "not-a-real-codegraph-binary"}, runner=runner
+                )
+            }
+
+            self.assertFalse(results["CodeGraph version"].ok)
+            self.assertEqual(results["CodeGraph version"].status, "")
+            self.assertIn("configured executable unavailable", results["CodeGraph version"].detail)
+            self.assertEqual(results["RTK version"].status, "skipped")
+
+    def test_preflight_codegraph_uses_configured_path_without_path_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            tools_dir = root / "tools"
+            tools_dir.mkdir()
+            codegraph = tools_dir / "codegraph"
+            codegraph.write_text("", encoding="utf-8")
+            runner = FakeRunner(root)
+
+            with mock.patch.dict(
+                os.environ, {"V23_CODEGRAPH_BIN": "", "PATH": "/usr/bin:/bin"}, clear=False
+            ):
+                result = preflight_codegraph(
+                    root, writable=False, codegraph=str(codegraph), runner=runner
+                )
+
+            self.assertTrue(result.ok, result)
+            self.assertTrue(any(call[0][0] == str(codegraph) for call in runner.calls))
+
+    def test_preflight_codegraph_env_override_wins_over_configured_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            tools_dir = root / "tools"
+            tools_dir.mkdir()
+            configured = tools_dir / "codegraph"
+            configured.write_text("", encoding="utf-8")
+            override = tools_dir / "codegraph-override"
+            override.write_text("", encoding="utf-8")
+            runner = FakeRunner(root)
+
+            with mock.patch.dict(
+                os.environ,
+                {"V23_CODEGRAPH_BIN": str(override), "PATH": "/usr/bin:/bin"},
+                clear=False,
+            ):
+                result = preflight_codegraph(
+                    root, writable=False, codegraph=str(configured), runner=runner
+                )
+
+            self.assertTrue(result.ok, result)
+            invoked = [call[0][0] for call in runner.calls]
+            self.assertIn(str(override), invoked)
+            self.assertNotIn(str(configured), invoked)
+
+    def test_preflight_codegraph_reports_invalid_configured_path_honestly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / ".git/info").mkdir(parents=True)
+            runner = FakeRunner(root)
+
+            with mock.patch.dict(
+                os.environ, {"V23_CODEGRAPH_BIN": "", "PATH": "/usr/bin:/bin"}, clear=False
+            ):
+                result = preflight_codegraph(
+                    root,
+                    writable=False,
+                    codegraph="/nonexistent/codegraph",
+                    runner=runner,
+                )
+
+            self.assertFalse(result.ok)
+            self.assertIn("configured codegraph executable is unavailable", result.detail)
+            self.assertFalse(any(call[0][0].endswith("codegraph") for call in runner.calls))
 
     def test_probe_reports_missing_tool_without_skipping_other_required_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

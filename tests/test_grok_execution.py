@@ -105,6 +105,7 @@ def _run_args(directory: str, **overrides: object) -> argparse.Namespace:
         "task_id": "quota-test",
         "timeout": None,
         "receipt": None,
+        "local_config": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -1277,6 +1278,114 @@ class GrokExecutionTests(unittest.TestCase):
         )
         self.assertEqual(receipt["enforcement_extension"], extension)
         self.assertEqual(receipt["rtk_log"], rtk_log)
+
+    def test_run_uses_configured_tools_without_path_fallback(self) -> None:
+        events: list[tuple[str, ...]] = []
+        observed: dict[str, object] = {}
+
+        def fake_run(command, _cwd=None, **kwargs):
+            observed["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            (cwd / ".git/info").mkdir(parents=True)
+            tools_dir = cwd / "tools"
+            tools_dir.mkdir()
+            codegraph = tools_dir / "codegraph"
+            codegraph.write_text("", encoding="utf-8")
+            rtk = tools_dir / "rtk"
+            rtk.write_text("", encoding="utf-8")
+            local = cwd / "local.toml"
+            local.write_text(
+                f'[tools]\ncodegraph = "{codegraph}"\nrtk = "{rtk}"\n', encoding="utf-8"
+            )
+            runner = PreflightRunner(cwd)
+
+            def recording_runner(command, run_cwd, timeout):
+                events.append(command)
+                return runner(command, run_cwd, timeout)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"V23_CODEGRAPH_BIN": "", "PATH": "/usr/bin:/bin"},
+                    clear=False,
+                ),
+                mock.patch("scripts.task_bootstrap._system_runner", recording_runner),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(directory, task_kind="code", local_config=str(local))
+                )
+
+        self.assertTrue(receipt["codegraph_preflight"]["ok"])
+        self.assertTrue(any(command[0] == str(codegraph) for command in events))
+        env = observed["env"]
+        assert isinstance(env, dict)
+        self.assertEqual(env["V23_RTK_BIN"], str(rtk))
+
+    def test_run_reads_installed_default_local_config_for_rtk(self) -> None:
+        observed: dict[str, object] = {}
+
+        def fake_run(command, _cwd=None, **kwargs):
+            observed["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(command, 0, _pi_jsonl(), "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            codex_home = root / "codex"
+            config_dir = codex_home / "harness/v23"
+            config_dir.mkdir(parents=True)
+            rtk = root / "tools/rtk"
+            rtk.parent.mkdir()
+            rtk.write_text("", encoding="utf-8")
+            (config_dir / "local.toml").write_text(f'[tools]\nrtk = "{rtk}"\n', encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
+            ):
+                grok_execution._run(_run_args(directory))
+
+        env = observed["env"]
+        assert isinstance(env, dict)
+        self.assertEqual(env["V23_RTK_BIN"], str(rtk))
+
+    def test_run_reports_invalid_configured_codegraph_honestly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = pathlib.Path(directory).resolve()
+            (cwd / ".git/info").mkdir(parents=True)
+            local = cwd / "local.toml"
+            local.write_text('[tools]\ncodegraph = "/nonexistent/codegraph"\n', encoding="utf-8")
+            runner = PreflightRunner(cwd)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"V23_CODEGRAPH_BIN": "", "PATH": "/usr/bin:/bin"},
+                    clear=False,
+                ),
+                mock.patch("scripts.task_bootstrap._system_runner", runner),
+                mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                mock.patch.object(
+                    grok_execution,
+                    "_supervised_run",
+                    return_value=subprocess.CompletedProcess(["pi"], 0, _pi_jsonl(), ""),
+                ),
+            ):
+                receipt = grok_execution._run(
+                    _run_args(directory, task_kind="code", local_config=str(local))
+                )
+
+        self.assertFalse(receipt["codegraph_preflight"]["ok"])
+        self.assertIn(
+            "configured codegraph executable is unavailable",
+            receipt["codegraph_preflight"]["detail"],
+        )
+        self.assertFalse(any(command[0] == "/nonexistent/codegraph" for command in runner.calls))
 
     def test_missing_explicit_enforcement_extension_fails_before_spawn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

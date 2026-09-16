@@ -20,7 +20,14 @@ states the limit. Optional CodeGraph is for structural
 disambiguation, callers, dependencies, or impact. Semble stays optional after
 bounded keywords fail. RTK routes only a finite verified supported set
 (`rtk git`, `rtk ls`, `rtk pytest`); the explicitly loaded owned Pi extension
-routes plain `pytest` and `python -m pytest` through `rtk pytest` by default.
+routes bare `pytest` through `rtk pytest` by default, while `python -m pytest`,
+`pytest3`, and explicit interpreter or pytest paths stay raw because that
+route does not prove it preserves the selected executable. Optional tools
+resolve from the `V23_*` override, then the configured `[tools]` path, then
+PATH only when unconfigured; the bridge reads the local config
+(`--local-config`, else `${CODEX_HOME}/harness/v23/local.toml`, else
+`~/.config/codex-harness/local.toml`) and propagates `[tools].rtk` to the Pi
+child as `V23_RTK_BIN`.
 Exact JSON, porcelain, diffs, and
 necessary raw diagnostics stay raw and preserve exit status; unsupported
 compound shell syntax is never silently rewritten, and a missing rtk falls
