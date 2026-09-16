@@ -33,6 +33,8 @@ def _pi_jsonl(
     thinking: str | None = None,
     usage: dict[str, int] | None = None,
     error_message: str | None = None,
+    user_text: str = "hi",
+    tool_text: str | None = None,
 ) -> str:
     token_usage = usage or {
         "input": 1,
@@ -52,7 +54,7 @@ def _pi_jsonl(
             {"type": "agent_start"},
             {
                 "type": "message_end",
-                "message": {"role": "user", "content": "hi", "timestamp": 1},
+                "message": {"role": "user", "content": user_text, "timestamp": 1},
             },
             {
                 "type": "message_end",
@@ -67,9 +69,23 @@ def _pi_jsonl(
                     "timestamp": 2,
                 },
             },
-            {"type": "agent_end", "messages": []},
         ]
     )
+    if tool_text is not None:
+        events.append(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "call-1",
+                    "toolName": "bash",
+                    "isError": True,
+                    "content": [{"type": "text", "text": tool_text}],
+                    "timestamp": 3,
+                },
+            }
+        )
+    events.append({"type": "agent_end", "messages": []})
     return "\n".join(json.dumps(item) for item in events)
 
 
@@ -820,6 +836,203 @@ class GrokExecutionTests(unittest.TestCase):
                 ):
                     grok_execution._run(args)
                 self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+
+    def test_success_transcript_content_never_authorizes_quota_fallback(self) -> None:
+        quoted_grok = (
+            "OpenAI API error (403): You have run out of credits or need a Grok subscription"
+        )
+        cases = (
+            ("assistant text", {"text": "insufficient_quota: weekly limit reached"}),
+            ("user prompt", {"user_text": "weekly limit reached"}),
+            ("tool result", {"tool_text": quoted_grok}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for label, overrides in cases:
+                stdout = _pi_jsonl(
+                    stop="stop",
+                    provider="qwen-token-plan-cn",
+                    model="deepseek-v4.1-flash",
+                    **overrides,
+                )
+                with (
+                    mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                    mock.patch.object(
+                        grok_execution,
+                        "_supervised_run",
+                        return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                    ),
+                ):
+                    receipt = grok_execution._run(
+                        _run_args(
+                            directory,
+                            provider="qwen-token-plan-cn",
+                            model="deepseek-v4.1-flash",
+                            effort="max",
+                        )
+                    )
+                self.assertEqual(receipt["status"], "SUCCESS", label)
+                self.assertEqual(receipt["provider"], "qwen-token-plan-cn", label)
+
+    def test_success_after_intermediate_quota_error_remains_success(self) -> None:
+        usage = {
+            "input": 1,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0,
+            "totalTokens": 1,
+        }
+        stdout = "\n".join(
+            json.dumps(event)
+            for event in (
+                {
+                    "type": "session",
+                    "version": 3,
+                    "id": "sess-1",
+                    "timestamp": "t",
+                    "cwd": "/tmp",
+                },
+                {"type": "agent_start"},
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "retrying after provider error"}],
+                        "provider": "qwen-token-plan-cn",
+                        "model": "deepseek-v4.1-flash",
+                        "stopReason": "error",
+                        "errorMessage": "insufficient_quota: weekly limit reached",
+                        "usage": usage,
+                        "timestamp": 2,
+                    },
+                },
+                {
+                    "type": "auto_retry_start",
+                    "errorMessage": "insufficient_quota: weekly limit reached",
+                },
+                {"type": "auto_retry_end", "success": True},
+                {
+                    "type": "message_end",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "provider": "qwen-token-plan-cn",
+                        "model": "deepseek-v4.1-flash",
+                        "stopReason": "stop",
+                        "usage": usage,
+                        "timestamp": 3,
+                    },
+                },
+                {"type": "agent_end", "messages": []},
+            )
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+            ),
+        ):
+            receipt = grok_execution._run(
+                _run_args(
+                    directory,
+                    provider="qwen-token-plan-cn",
+                    model="deepseek-v4.1-flash",
+                    effort="max",
+                )
+            )
+        self.assertEqual(receipt["status"], "SUCCESS")
+        self.assertEqual(receipt["response"], "ok")
+
+    def test_failed_process_with_quoted_quota_transcript_is_not_quota(self) -> None:
+        stdout = _pi_jsonl(stop="stop", tool_text="out of credits", user_text="quota exhausted")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 1, stdout, ""),
+            ),
+            self.assertRaises(grok_execution.BridgeError) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+        self.assertIn("exit code 1", str(raised.exception))
+
+    def test_failed_process_raw_stdout_quota_still_authorizes_fallback(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(
+                    ["pi"], 1, "insufficient_quota: weekly limit reached", ""
+                ),
+            ),
+            self.assertRaises(grok_execution.QuotaExhausted) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertEqual(raised.exception.receipt["fallback_reason"], "grok_quota_exhausted")
+
+    def test_exit_zero_generic_http_errors_remain_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for message in (
+                "authentication failed",
+                "OpenAI API error (403): Forbidden",
+                "429 status code (no body)",
+            ):
+                stdout = _pi_jsonl(stop="error", error_message=message)
+                with (
+                    mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+                    mock.patch.object(
+                        grok_execution,
+                        "_supervised_run",
+                        return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+                    ),
+                    self.assertRaises(grok_execution.BridgeError) as raised,
+                ):
+                    grok_execution._run(_run_args(directory))
+                self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted, message)
+
+    def test_terminal_nonquota_error_with_quoted_quota_prose_remains_error(self) -> None:
+        stdout = _pi_jsonl(
+            stop="error",
+            error_message="authentication failed",
+            text="the tool output quoted insufficient_quota: weekly limit reached",
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+            ),
+            self.assertRaises(grok_execution.BridgeError) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+        self.assertIn("non-success stop reason", str(raised.exception))
+
+    def test_terminal_error_without_error_message_is_not_quota(self) -> None:
+        stdout = _pi_jsonl(stop="error", text="quota exhausted: out of credits")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+            ),
+            self.assertRaises(grok_execution.BridgeError) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+        self.assertIn("non-success stop reason", str(raised.exception))
 
     def test_prompt_stays_off_argv_and_file_is_mode_0600_during_subprocess(self) -> None:
         observed: dict[str, object] = {}
