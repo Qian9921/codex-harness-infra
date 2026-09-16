@@ -7,11 +7,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 from scripts.bounded_search import STATUS_NO_MATCH, STATUS_TIMEOUT, SearchError, run_search
 from scripts.github_delivery import DeliveryFlow, FlowError, GHClient, ReviewVerdict
 from scripts.install import install, uninstall
-from scripts.task_bootstrap import _semble_health_scope, probe_tools, run_hook
+from scripts.task_bootstrap import RTK_VERIFIED_ROUTES, _semble_health_scope, probe_tools, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,23 +20,64 @@ ROOT = Path(__file__).resolve().parents[1]
 class ToolRunner:
     """Controlled tool environment that records each actual Harness invocation."""
 
-    def __init__(self, root: Path, *, timeout_codegraph: bool = False) -> None:
+    FRESH_STATUS: ClassVar[dict] = {
+        "initialized": True,
+        "fileCount": 3,
+        "pendingChanges": {"added": 0, "modified": 0, "removed": 0},
+        "index": {"state": "complete", "reindexRecommended": False},
+        "lastIndexed": "2026-09-16T00:00:00.000Z",
+    }
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        timeout_codegraph: bool = False,
+        codegraph_status: dict | None = None,
+        rtk_fail_routes: tuple[str, ...] = (),
+        rtk_probe_fail: bool = False,
+    ) -> None:
         self.root = root
         self.timeout_codegraph = timeout_codegraph
+        self.codegraph_status = dict(codegraph_status or self.FRESH_STATUS)
+        self.rtk_fail_routes = set(rtk_fail_routes)
+        self.rtk_probe_fail = rtk_probe_fail
         self.calls: list[tuple[str, ...]] = []
 
     def __call__(
         self, command: tuple[str, ...], _cwd: Path | None, timeout: int
     ) -> subprocess.CompletedProcess[str]:
         self.calls.append(command)
+        codegraph = str(self.root / "codegraph")
+        rtk = str(self.root / "rtk")
         if command[:4] == ("git", "-C", str(self.root), "rev-parse"):
             output = f"{self.root}\n" if command[-1] == "--show-toplevel" else ".git/info/exclude\n"
             return subprocess.CompletedProcess(command, 0, output, "")
-        if command[0] == str(self.root / "codegraph"):
+        if command[0] == codegraph:
             if self.timeout_codegraph:
                 raise subprocess.TimeoutExpired(command, timeout)
+            if command[1] == "status" and "--json" in command:
+                return subprocess.CompletedProcess(
+                    command, 0, json.dumps(self.codegraph_status) + "\n", ""
+                )
             if command[1] == "status":
-                return subprocess.CompletedProcess(command, 0, "Not initialized\n", "")
+                state = "ok\n" if self.codegraph_status.get("initialized") else "Not initialized\n"
+                return subprocess.CompletedProcess(command, 0, state, "")
+            if command[1] in ("init", "sync"):
+                self.codegraph_status["initialized"] = True
+                self.codegraph_status["pendingChanges"] = {
+                    "added": 0,
+                    "modified": 0,
+                    "removed": 0,
+                }
+                if isinstance(self.codegraph_status.get("index"), dict):
+                    self.codegraph_status["index"]["reindexRecommended"] = False
+                return subprocess.CompletedProcess(command, 0, "ok\n", "")
+        if command[0] == rtk:
+            if "--help" in command and command[1] in self.rtk_fail_routes:
+                return subprocess.CompletedProcess(command, 1, "", f"unknown command {command[1]}")
+            if self.rtk_probe_fail and "--help" not in command:
+                return subprocess.CompletedProcess(command, 1, "", "routed probe exploded")
         return subprocess.CompletedProcess(command, 0, "ok\n", "")
 
 
@@ -142,9 +184,9 @@ class HarnessScenarioEvals(unittest.TestCase):
             results = probe_tools(root, "Inspect delivery adapter.", tools, runner=runner)
             self.assertTrue(all(result.ok for result in results))
             commands = runner.calls
-            self.assertTrue(
-                any(command[:2] == (tools["codegraph"], "files") for command in commands)
-            )
+            codegraph_commands = [c for c in commands if c[0] == tools["codegraph"]]
+            self.assertEqual([c[1] for c in codegraph_commands], ["status", "query"])
+            self.assertNotIn("files", [part for command in commands for part in command])
             self.assertTrue(any(command[:2] == (tools["semble"], "search") for command in commands))
             self.assertTrue(any(command[:2] == (tools["rtk"], "git") for command in commands))
 
@@ -162,6 +204,59 @@ class HarnessScenarioEvals(unittest.TestCase):
             self.assertEqual([result.ok for result in results], [False, True, True])
             self.assertTrue(any(command[0] == tools["semble"] for command in runner.calls))
             self.assertTrue(any(command[0] == tools["rtk"] for command in runner.calls))
+
+    def test_index_check_precedes_structural_query(self) -> None:
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            results = probe_tools(
+                root,
+                "Who calls assemble?",
+                tools,
+                runner=runner,
+                codegraph_symbol="assemble",
+            )
+            self.assertTrue(results[0].ok)
+            codegraph_calls = [c for c in runner.calls if c[0] == tools["codegraph"]]
+            self.assertEqual([c[1] for c in codegraph_calls], ["status", "callers"])
+            self.assertNotIn("files", [part for command in runner.calls for part in command])
+
+    def test_stale_index_refreshes_or_states_read_only_limit(self) -> None:
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            runner.codegraph_status["pendingChanges"] = {"added": 0, "modified": 1, "removed": 0}
+            results = probe_tools(root, "Change assemble.", tools, runner=runner)
+            self.assertTrue(results[0].ok)
+            self.assertIn("sync", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            runner.codegraph_status["initialized"] = False
+            results = probe_tools(
+                root,
+                "Read-only investigation.",
+                tools,
+                runner=runner,
+                initialize_codegraph=False,
+            )
+            self.assertFalse(results[0].ok)
+            self.assertIn("read-only", results[0].detail)
+            self.assertIn("bounded-search", results[0].detail)
+            self.assertNotIn("init", [c[1] for c in runner.calls if c[0] == tools["codegraph"]])
+
+    def test_rtk_routes_finite_verified_set_and_preserves_failure(self) -> None:
+        directory, root, tools, runner = self.tool_environment()
+        with directory:
+            results = probe_tools(root, "Compact summary.", tools, runner=runner)
+            self.assertTrue(results[2].ok)
+            rtk_calls = [c for c in runner.calls if c[0] == tools["rtk"]]
+            self.assertTrue(all(c[1] in RTK_VERIFIED_ROUTES for c in rtk_calls))
+            self.assertFalse(any("--short" in c or "--json" in c for c in rtk_calls))
+        failing_directory, failing_root, failing_tools, _failing_runner = self.tool_environment()
+        with failing_directory:
+            failing = ToolRunner(failing_root, rtk_probe_fail=True)
+            failed = probe_tools(failing_root, "Compact summary.", failing_tools, runner=failing)[2]
+            self.assertFalse(failed.ok)
+            self.assertIn("routed probe exploded", failed.detail)
+            self.assertIn("raw", failed.detail)
 
     def test_hook_does_not_block_unrelated_work(self) -> None:
         directory, root, tools, runner = self.tool_environment()

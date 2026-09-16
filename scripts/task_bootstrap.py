@@ -2,10 +2,12 @@
 
 The script is installed outside repositories and invoked by the sole V23
 ``UserPromptSubmit`` hook. It injects a bounded live runtime-state block.
-CodeGraph, Semble, and RTK remain available through explicit Doctor and
-``probe_tools`` calls; they are not mandatory on every prompt. Install
-manifest and live daemon probes are authoritative; prior-task memory is
-historical only. It deliberately has no task database, Stop hook, or
+CodeGraph, Semble, and RTK remain explicit Doctor/``probe_tools`` calls, not a
+per-prompt batch; code investigation or change tasks owe the CodeGraph index
+check described in the installed routing reference. Explicit maintenance can
+call ``probe_tool_versions`` for bounded versions and update availability.
+Install manifest and live daemon probes are authoritative; prior-task memory
+is historical only. It deliberately has no task database, Stop hook, or
 background loop.
 """
 
@@ -89,7 +91,12 @@ GIT_DISCOVERY_TIMEOUT_SECONDS = 4
 CODEGRAPH_TIMEOUT_SECONDS = 14
 SEMBLE_TIMEOUT_SECONDS = 36
 RTK_TIMEOUT_SECONDS = 8
+UPDATE_CHECK_TIMEOUT_SECONDS = 20
 LIVE_PROBE_TIMEOUT_SECONDS = 12
+# Finite RTK routes, each verified through its own --help before a routed
+# call. Anything outside this set stays raw: exact JSON, porcelain, unified
+# diffs, and necessary raw diagnostics are explicit raw exceptions.
+RTK_VERIFIED_ROUTES = ("git", "ls", "pytest")
 HOOK_TIMEOUT_OVERHEAD_SECONDS = 8
 HOOK_TIMEOUT_SECONDS = HOOK_TIMEOUT_OVERHEAD_SECONDS
 DEFAULT_PRIMARY_EFFORT = "high"
@@ -265,46 +272,168 @@ def _ensure_codegraph_exclude(root: Path, runner: CommandRunner) -> tuple[bool, 
     return True, "added Git-local cache exclusion"
 
 
+def _codegraph_state_text(payload: dict[str, object]) -> str:
+    """Render the owner index's declared current-tree freshness."""
+    pending = payload.get("pendingChanges")
+    pending_total = 0
+    if isinstance(pending, dict):
+        pending_total = sum(
+            int(value) for value in pending.values() if isinstance(value, (int, float))
+        )
+    index = payload.get("index")
+    state = index.get("state") if isinstance(index, dict) else None
+    return (
+        f"initialized={bool(payload.get('initialized'))} files={payload.get('fileCount', '?')} "
+        f"pending={pending_total} state={state or 'reported'} "
+        f"indexed={payload.get('lastIndexed', 'unknown')}"
+    )
+
+
+def _codegraph_stale(payload: dict[str, object]) -> bool:
+    """True when the current tree differs from the indexed tree or was never complete."""
+    pending = payload.get("pendingChanges")
+    if isinstance(pending, dict) and any(
+        isinstance(value, (int, float)) and value > 0 for value in pending.values()
+    ):
+        return True
+    if payload.get("worktreeMismatch"):
+        return True
+    index = payload.get("index")
+    if isinstance(index, dict):
+        if index.get("reindexRecommended"):
+            return True
+        state = index.get("state")
+        if isinstance(state, str) and state != "complete":
+            return True
+    return False
+
+
+def _codegraph_status(
+    executable: str, root: Path, runner: CommandRunner
+) -> tuple[bool, str, dict[str, object]]:
+    """Read the owner index state from JSON, then declared text for old versions."""
+    ok, detail = _run_json(
+        (executable, "status", "--json", str(root)), runner, CODEGRAPH_TIMEOUT_SECONDS
+    )
+    if ok:
+        start = detail.find("{")
+        try:
+            loaded = json.loads(detail if start < 0 else detail[start:])
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            return True, _codegraph_state_text(loaded), loaded
+    plain_ok, plain = _run(
+        (executable, "status", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
+    )
+    if plain_ok:
+        # CodeGraph reports an uninitialized project in stdout with exit 0.
+        initialized = "not initialized" not in plain.casefold()
+        return True, plain, {"initialized": initialized}
+    return False, detail, {}
+
+
 def _codegraph_result(
     executable: str | None,
     root: Path | None,
     runner: CommandRunner,
     initialize: bool,
+    *,
+    query: str = "",
+    symbol: str | None = None,
 ) -> ToolResult:
-    """Probe and actually query CodeGraph, creating only a V23-local cache."""
+    """Check the owner index before any query; refresh only with write authority."""
     if not executable:
-        return ToolResult("CodeGraph", False, "not configured or unavailable")
+        return ToolResult(
+            "CodeGraph", False, "not configured; baseline bounded-search/direct reads"
+        )
     if root is None:
         ok, detail = _run((executable, "--version"), None, runner, CODEGRAPH_TIMEOUT_SECONDS)
-        suffix = "non-Git directory; version probe" if ok else detail
+        suffix = (
+            "non-Git directory; version probe"
+            if ok
+            else f"{detail}; baseline bounded-search/direct reads"
+        )
         return ToolResult("CodeGraph", ok, suffix)
     if initialize:
         excluded, detail = _ensure_codegraph_exclude(root, runner)
         if not excluded:
             return ToolResult("CodeGraph", False, detail)
-    status_ok, status = _run(
-        (executable, "status", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
-    )
-    # CodeGraph 1.5 reports an uninitialized project in stdout with exit 0.
-    # Treat the declared state, not only the process code, as authoritative.
-    if "not initialized" in status.casefold():
-        status_ok = False
-    if not status_ok and initialize:
-        status_ok, status = _run(
-            (executable, "init", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
-        )
-        if not status_ok:
-            return ToolResult("CodeGraph", False, f"init failed: {status}")
-    if not status_ok:
-        return ToolResult("CodeGraph", False, f"status failed: {status}")
-    if initialize:
+    status_ok, status, payload = _codegraph_status(executable, root, runner)
+    initialized = status_ok and bool(payload.get("initialized"))
+    stale = initialized and _codegraph_stale(payload)
+    if not initialized or stale:
+        if initialized:
+            state = "stale index"
+        elif status_ok:
+            state = "index missing"
+        else:
+            state = "index status unavailable"
+        if not initialize:
+            return ToolResult(
+                "CodeGraph",
+                False,
+                f"{state}; read-only fallback to bounded-search/direct reads, state the limit",
+            )
+        if not initialized:
+            initialized_ok, init_detail = _run(
+                (executable, "init", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
+            )
+            if not initialized_ok:
+                return ToolResult(
+                    "CodeGraph",
+                    False,
+                    f"init failed: {init_detail}; baseline bounded-search/direct reads",
+                )
         synced, sync_detail = _run(
             (executable, "sync", str(root)), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root
         )
         if not synced:
-            return ToolResult("CodeGraph", False, f"sync failed: {sync_detail}")
-    queried, detail = _run((executable, "files"), root, runner, CODEGRAPH_TIMEOUT_SECONDS, root)
-    return ToolResult("CodeGraph", queried, detail if queried else f"files query failed: {detail}")
+            return ToolResult(
+                "CodeGraph",
+                False,
+                f"sync failed: {sync_detail}; baseline bounded-search/direct reads",
+            )
+        status_ok, status, payload = _codegraph_status(executable, root, runner)
+        if not status_ok or not payload.get("initialized"):
+            return ToolResult(
+                "CodeGraph",
+                False,
+                f"refresh failed: {status}; baseline bounded-search/direct reads",
+            )
+        if _codegraph_stale(payload):
+            return ToolResult(
+                "CodeGraph",
+                False,
+                f"index still stale after sync: {status}; cross-check current source",
+            )
+    if symbol:
+        queried, detail = _run(
+            (executable, "callers", "-p", str(root), "--json", symbol),
+            root,
+            runner,
+            CODEGRAPH_TIMEOUT_SECONDS,
+            root,
+        )
+        return ToolResult(
+            "CodeGraph",
+            queried,
+            detail if queried else f"structural query failed: {detail}; cross-check current source",
+        )
+    if query:
+        queried, detail = _run(
+            (executable, "query", "-p", str(root), "--json", query),
+            root,
+            runner,
+            CODEGRAPH_TIMEOUT_SECONDS,
+            root,
+        )
+        return ToolResult(
+            "CodeGraph",
+            queried,
+            detail if queried else f"focused query failed: {detail}; cross-check current source",
+        )
+    return ToolResult("CodeGraph", True, f"index check: {status}")
 
 
 def _prompt_query(prompt: str) -> str:
@@ -319,9 +448,9 @@ def _semble_health_scope() -> Path:
 
 
 def _semble_result(executable: str | None, prompt: str, runner: CommandRunner) -> ToolResult:
-    """Run a real, bounded semantic search without indexing an umbrella workspace."""
+    """Run an optional, bounded semantic search without indexing an umbrella workspace."""
     if not executable:
-        return ToolResult("Semble", False, "not configured or unavailable")
+        return ToolResult("Semble", False, "not configured; semantic discovery skipped")
     target = _semble_health_scope()
     command = (
         executable,
@@ -342,16 +471,34 @@ def _semble_result(executable: str | None, prompt: str, runner: CommandRunner) -
 def _rtk_result(
     executable: str | None, root: Path | None, cwd: Path, runner: CommandRunner
 ) -> ToolResult:
-    """Run one compact real workspace inspection through RTK."""
+    """Route only the finite verified RTK set; raw exceptions stay raw."""
     if not executable:
-        return ToolResult("RTK", False, "not configured or unavailable")
+        return ToolResult("RTK", False, "not configured; keep commands raw")
+    unsupported: list[str] = []
+    for route in RTK_VERIFIED_ROUTES:
+        ok, _detail = _run((executable, route, "--help"), cwd, runner, RTK_TIMEOUT_SECONDS, root)
+        if not ok:
+            unsupported.append(route)
+    probe_route = "git" if root is not None else "ls"
+    if probe_route in unsupported:
+        return ToolResult(
+            "RTK",
+            False,
+            f"rtk {probe_route} route unavailable (unsupported: {','.join(unsupported)}); "
+            "keep commands raw",
+        )
     command = (
-        (executable, "git", "-C", str(root), "status", "--short", "--branch")
-        if root
+        (executable, "git", "-C", str(root), "status")
+        if root is not None
         else (executable, "ls", str(cwd))
     )
     ok, detail = _run(command, cwd, runner, RTK_TIMEOUT_SECONDS, root)
-    return ToolResult("RTK", ok, detail)
+    if not ok:
+        return ToolResult("RTK", False, f"routed probe failed: {detail}; keep commands raw")
+    note = (
+        "" if not unsupported else f"; raw fallback for unsupported routes: {','.join(unsupported)}"
+    )
+    return ToolResult("RTK", True, detail + note)
 
 
 def probe_tools(
@@ -361,17 +508,71 @@ def probe_tools(
     *,
     runner: CommandRunner | None = None,
     initialize_codegraph: bool = True,
+    codegraph_symbol: str | None = None,
 ) -> list[ToolResult]:
-    """Explicit Doctor/task-relevant probe of CodeGraph, Semble, and RTK."""
+    """Explicit Doctor/task-relevant probe; the index check precedes any query."""
     runner = runner or _system_runner
     cwd = cwd.resolve()
     root = _git_root(cwd, runner)
     codegraph = _codegraph_result(
-        _resolve_executable(tools.get("codegraph")), root, runner, initialize_codegraph
+        _resolve_executable(tools.get("codegraph")),
+        root,
+        runner,
+        initialize_codegraph,
+        query=_prompt_query(prompt),
+        symbol=codegraph_symbol,
     )
     semble = _semble_result(_resolve_executable(tools.get("semble")), prompt, runner)
     rtk = _rtk_result(_resolve_executable(tools.get("rtk")), root, cwd, runner)
     return [codegraph, semble, rtk]
+
+
+def probe_tool_versions(
+    tools: dict[str, object], *, runner: CommandRunner | None = None
+) -> list[ToolResult]:
+    """Explicit install/migration maintenance: bounded versions and update check.
+
+    Never upgrades, starts no daemon, and reports an offline or unsupported
+    update check honestly instead of treating it as a tool failure.
+    """
+    runner = runner or _system_runner
+    results: list[ToolResult] = []
+    for key, label in (("codegraph", "CodeGraph"), ("rtk", "RTK")):
+        executable = _resolve_executable(tools.get(key))
+        if not executable:
+            results.append(ToolResult(f"{label} version", False, "not configured"))
+            continue
+        ok, detail = _run((executable, "--version"), None, runner, RTK_TIMEOUT_SECONDS)
+        results.append(
+            ToolResult(
+                f"{label} version",
+                ok,
+                detail if ok else f"version probe failed: {detail}",
+            )
+        )
+    semble = _resolve_executable(tools.get("semble"))
+    results.append(
+        ToolResult(
+            "Semble version",
+            True,
+            "installed; CLI does not expose --version" if semble else "not configured; optional",
+        )
+    )
+    codegraph = _resolve_executable(tools.get("codegraph"))
+    if codegraph:
+        checked, detail = _run(
+            (codegraph, "upgrade", "--check"), None, runner, UPDATE_CHECK_TIMEOUT_SECONDS
+        )
+        results.append(
+            ToolResult(
+                "CodeGraph update",
+                True,
+                detail
+                if checked
+                else f"update check unavailable (offline or unsupported): {detail}; no auto-update",
+            )
+        )
+    return results
 
 
 def _privacy_text(value: str) -> str:
@@ -1177,7 +1378,11 @@ def _hook_context(live_state: str = "") -> str:
     header = (
         "V23 prompt hook injected installed instructions and local integrity checks. "
         "CodeGraph, Semble, RTK, and daemon probes are explicit or task-relevant; "
-        "tool failure must not block unrelated work. Doctor diagnosis remains available."
+        "code investigation or change checks the owner CodeGraph index before "
+        "exploration and cross-file callers/dependencies/impact uses a focused "
+        "structural query; a missing/failed tool or read-only missing index states "
+        "the short bounded-search/raw fallback. Tool failure must not block "
+        "unrelated work. Doctor diagnosis remains available."
     )
     combined = f"{header} {live_state}".strip()
     if len(combined) > HOOK_CONTEXT_CAP:

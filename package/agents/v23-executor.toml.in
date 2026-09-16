@@ -22,6 +22,13 @@ claim-appropriate evidence. Insufficient evidence remains a working
 hypothesis. When delegating, send the goal, constraints, inspected candidate
 evidence, the actual gap, and unknowns. Straightforward tasks need only a
 brief check.
+Code investigation or change checks the owner-repo CodeGraph index before code
+exploration and cross-checks current source; cross-file callers, dependencies,
+or impact uses a focused structural query, not only a file listing. A missing
+or stale index is refreshed only with write authority in that owner repo from
+current-tree freshness; read-only work states the bounded-search limit. Tool
+absence or failure uses an explicit short baseline fallback, never "not
+needed".
 Do not add new ceremonies, hashes, gates, or abstraction layers without a
 concrete failure mode that ordinary version control, types, tests, or platform
 controls cannot handle. Escalate only real ambiguity or consequential external

@@ -380,6 +380,55 @@ instruction = "Local-only opening."
             self.assertTrue(checks["tools_optional"]["ok"])
             self.assertNotIn("tool_codegraph", checks)
 
+    def test_probe_updates_checks_versions_without_upgrading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[tools]
+codegraph = "codegraph"
+semble = "semble"
+rtk = "rtk"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            codex_home = root / "codex"
+            install(ROOT, codex_home, local, root / "state")
+            seen: list[dict] = []
+
+            def update_probe(tools: dict) -> list[ToolResult]:
+                seen.append(tools)
+                return [
+                    ToolResult("CodeGraph version", True, "1.5.0"),
+                    ToolResult("CodeGraph update", True, "update check unavailable (offline)"),
+                ]
+
+            report = doctor(
+                codex_home,
+                local,
+                ROOT / "tests",
+                check_github=False,
+                probe_required_tools=False,
+                probe_updates=True,
+                update_probe=update_probe,
+            )
+            checks = {check["name"]: check for check in report["checks"]}
+            self.assertTrue(seen)
+            self.assertTrue(checks["tool_codegraph_version"]["ok"])
+            self.assertTrue(checks["tool_codegraph_update"]["ok"])
+            self.assertIn("offline", str(checks["tool_codegraph_update"]["detail"]))
+            unprobed = doctor(
+                codex_home, local, ROOT / "tests", check_github=False, probe_required_tools=False
+            )
+            names = {check["name"] for check in unprobed["checks"]}
+            self.assertNotIn("tool_codegraph_update", names)
+
     def test_github_write_without_identities_is_unready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

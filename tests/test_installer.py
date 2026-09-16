@@ -1315,6 +1315,51 @@ availability = "configured"
                 install(repo, codex_home, local, root / "state")
             self.assertEqual(sidecar.read_text(encoding="utf-8"), "personal runtime\n")
 
+    def test_install_cli_reports_bounded_tool_check_without_upgrading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[opening]
+instruction = ""
+
+[tools]
+codegraph = "not-a-real-codegraph-binary"
+semble = "not-a-real-semble-binary"
+rtk = "not-a-real-rtk-binary"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/install.py"),
+                    "install",
+                    "--repo-root",
+                    str(ROOT),
+                    "--codex-home",
+                    str(root / "codex"),
+                    "--local-config",
+                    str(local),
+                    "--state-dir",
+                    str(root / "state"),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("Bounded install/migration tool check (never upgrades)", completed.stdout)
+            self.assertIn("CodeGraph version: failed: not configured", completed.stdout)
+            self.assertIn("Semble version: ok: not configured; optional", completed.stdout)
+            self.assertNotIn("codegraph upgrade", completed.stdout)
+
     def test_installed_native_roles_and_bound_prompt_carry_reuse_clause(self) -> None:
         marker = "Name or similarity is not fitness"
         configs = {
@@ -1435,7 +1480,12 @@ target = "native"
                 self.assertIn(marker, portable)
                 tool_marker = "Optional tools are selected only for a concrete need"
                 self.assertIn(tool_marker, installed)
+                self.assertIn("BEFORE code exploration", installed)
+                self.assertIn("finite verified supported set", installed)
                 self.assertIn("TOOL_SELECTION_GUIDANCE", grok_bridge)
+                flat_bridge = " ".join(grok_bridge.split())
+                self.assertIn("BEFORE code exploration", flat_bridge)
+                self.assertIn("finite verified supported set", flat_bridge)
                 self.assertIn("not installed by this Harness", grok_bridge)
                 self.assertIn("command -v", grok_bridge)
                 self.assertIn('f"{TOOL_SELECTION_GUIDANCE}', grok_bridge)
@@ -1443,12 +1493,16 @@ target = "native"
                 self.assertIn("本 Harness 不安装它", portable)
                 self.assertIn("focused CodeGraph", portable)
                 self.assertIn("可选工具仅在有具体需要时调用", portable)
+                self.assertIn("probe-updates", portable)
                 routing_text = (
                     codex_home / "skills/engineering-delivery/references/tool-routing.md"
                 ).read_text(encoding="utf-8")
                 self.assertIn("codegraph callers", routing_text)
                 self.assertIn("status --json", routing_text)
+                self.assertIn("BEFORE code exploration", routing_text)
+                self.assertIn("finite verified", routing_text)
                 self.assertIn("rtk pytest", routing_text)
+                self.assertIn("probe-updates", routing_text)
                 self.assertIn("command -v", routing_text)
                 self.assertNotIn("status -p", routing_text)
                 self.assertFalse((codex_home / "skills/codegraph/SKILL.md").exists())
