@@ -304,11 +304,12 @@ def _jsonl_error_detail(events: Sequence[dict[str, Any]]) -> str:
 
 
 def _terminal_error_detail(events: Sequence[dict[str, Any]]) -> str:
-    """Return provider error text from the terminal assistant message only.
+    """Return the structured provider error from the terminal assistant message.
 
-    An intermediate stop-reason error can be followed by a successful
-    auto-retry, and assistant prose can quote unrelated provider failures, so
-    only the last assistant message with stop reason ``error`` is a terminal
+    Quota fallback must come from the provider's structured ``errorMessage``,
+    never from assistant prose: prose can quote unrelated provider failures,
+    an intermediate stop-reason error can be followed by a successful
+    auto-retry, and a terminal error without ``errorMessage`` carries no
     provider diagnostic.
     """
     assistants = _assistant_message_ends(events)
@@ -317,14 +318,10 @@ def _terminal_error_detail(events: Sequence[dict[str, Any]]) -> str:
     message = assistants[-1]
     if message.get("stopReason") != "error":
         return ""
-    parts: list[str] = []
     error_message = message.get("errorMessage")
     if isinstance(error_message, str) and error_message.strip():
-        parts.append(error_message)
-    text = _assistant_text(message)
-    if text.strip():
-        parts.append(text)
-    return "\n".join(parts)
+        return error_message
+    return ""
 
 
 def _quota_failure_detail(

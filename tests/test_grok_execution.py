@@ -998,6 +998,42 @@ class GrokExecutionTests(unittest.TestCase):
                     grok_execution._run(_run_args(directory))
                 self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted, message)
 
+    def test_terminal_nonquota_error_with_quoted_quota_prose_remains_error(self) -> None:
+        stdout = _pi_jsonl(
+            stop="error",
+            error_message="authentication failed",
+            text="the tool output quoted insufficient_quota: weekly limit reached",
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+            ),
+            self.assertRaises(grok_execution.BridgeError) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+        self.assertIn("non-success stop reason", str(raised.exception))
+
+    def test_terminal_error_without_error_message_is_not_quota(self) -> None:
+        stdout = _pi_jsonl(stop="error", text="quota exhausted: out of credits")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
+            mock.patch.object(
+                grok_execution,
+                "_supervised_run",
+                return_value=subprocess.CompletedProcess(["pi"], 0, stdout, ""),
+            ),
+            self.assertRaises(grok_execution.BridgeError) as raised,
+        ):
+            grok_execution._run(_run_args(directory))
+        self.assertNotIsInstance(raised.exception, grok_execution.QuotaExhausted)
+        self.assertIn("non-success stop reason", str(raised.exception))
+
     def test_prompt_stays_off_argv_and_file_is_mode_0600_during_subprocess(self) -> None:
         observed: dict[str, object] = {}
 
