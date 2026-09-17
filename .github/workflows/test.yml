@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  platform-tests:
+    name: platform-tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -34,3 +35,15 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python scripts/evaluate.py
       - run: python -m compileall -q scripts
+
+  test:
+    name: test
+    needs: platform-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every platform test job to succeed
+        if: ${{ needs['platform-tests'].result != 'success' }}
+        run: |
+          echo "platform-tests result: ${{ needs['platform-tests'].result }}" >&2
+          exit 1
