@@ -1,5 +1,5 @@
 version = 1
-count = 21
+count = 24
 
 [[scenario]]
 id = "discuss-read-only"
@@ -147,3 +147,24 @@ dimension = "tools"
 prompt = "Summarize the test run."
 expected = "Only the finite verified RTK route set is routed, and a routed failure preserves diagnostics."
 test = "tests.test_evaluate.HarnessScenarioEvals.test_rtk_routes_finite_verified_set_and_preserves_failure"
+
+[[scenario]]
+id = "pi-only-routing-blocked"
+dimension = "routing"
+prompt = "Run implementation with only Pi configured."
+expected = "paid_strict with only Pi executors and an empty fallback permit selects Pi and blocks an unavailable candidate instead of replacing it with a native executor."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_pi_only_routing_blocks_without_native_fallback"
+
+[[scenario]]
+id = "pi-direct-review-fresh-session"
+dimension = "policy"
+prompt = "Review a Pi-only change."
+expected = "A Pi-only route documents fresh read-only Pi review bindable to the current head; no native reviewer is required."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_pi_direct_review_uses_fresh_pi_session"
+
+[[scenario]]
+id = "claim-appropriate-evidence-precise"
+dimension = "policy"
+prompt = "Judge a performance and documentation claim."
+expected = "Official documentation is not local runtime evidence; a single run is not general performance; a repeated-run p95 is an aggregate over runs, not per-request latency; aggregate CPU does not show whether one core saturated."
+test = "tests.test_evaluate.HarnessScenarioEvals.test_claim_appropriate_evidence_guidance_is_precise"

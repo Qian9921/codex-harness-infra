@@ -22,8 +22,8 @@ Codex supplies the agent loop, permissions, skills, and subagent primitives. Thi
 The portable roles are `primary`, `executor`, and `reviewer`:
 
 - `primary` is decision-only: scope, routing, targeted read-only acceptance, and the final report. It never edits files and never performs mechanical execution, including tiny code, docs, or config fixes. If the executor route is unavailable, repair a valid route; do not fall back to primary implementation.
-- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter, now dispatched through the generic Pi adapter rather than GrokCLI. Backend identity and receipts load only from the selected backend skill.
-- `reviewer` uses fresh context and reviews the current change read-only.
+- the selected executor performs bounded implementation and relevant verification. `native_only` uses the Codex executor as a complete path. Paid-aware modes prefer a configured paid/included executor; a config without `[routing]` keeps the legacy Grok-preferred adapter, now dispatched through the generic Pi adapter rather than GrokCLI. Backend identity, receipts, and any configured supervision load only from the selected backend skill.
+- `reviewer` uses fresh context and reviews the current change read-only. A Pi-only route can use a fresh read-only Pi session; a native reviewer is not required.
 
 The local installation maps primary, executor, and reviewer roles to the models and tools available on that machine. Native model slugs, account mappings, credentials, opening instructions, and absolute paths remain local configuration. Shared policy names logical executor IDs and backends, not current native version strings.
 
@@ -33,8 +33,8 @@ Copy `package/local.example.toml` and set `[routing].selection`:
 
 - `native_only`: Codex-only. No Pi executable or quota receipt is required.
 - `paid_preferred`: prefer a matching paid/included executor; fallback only if `[routing.fallback]` permits a cause such as `quota_exhausted`.
-- `paid_strict`: same preference; block when the paid/included candidate is unsuitable, except for an explicit permitted fallback cause.
-- omit `[routing]`: legacy Martin-like Grok-preferred, actual-model receipt, quota-only native fallback.
+- `paid_strict`: same preference; block when the paid/included candidate is unsuitable, except for an explicit permitted fallback cause. With only Pi executors and an empty `[routing.fallback].permit`, this is a Pi-only configuration: an unavailable candidate is blocked, not replaced by a native executor.
+- omit `[routing]`: legacy Grok-preferred, actual-model receipt, quota-only native fallback.
 
 Supported adapters are native Codex and the generic Pi adapter (`backend = grok` or `backend = pi`). Cost preference is a user declaration, not a verified live balance. Unknown quota stays unknown. Model updates require changing local mappings only; do not treat a new native slug as an automatic migration. Do not fall back to GrokCLI.
 

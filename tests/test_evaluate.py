@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from typing import ClassVar
 
 from scripts.bounded_search import STATUS_NO_MATCH, STATUS_TIMEOUT, SearchError, run_search
+from scripts.executor_routing import parse_policy, select_executor
 from scripts.github_delivery import DeliveryFlow, FlowError, GHClient, ReviewVerdict
 from scripts.install import install, uninstall
 from scripts.task_bootstrap import RTK_VERIFIED_ROUTES, _semble_health_scope, probe_tools, run_hook
@@ -418,6 +420,74 @@ instruction = "Local-only opening."
             uninstall(codex_home, state)
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")
             self.assertEqual(config.read_text(encoding="utf-8"), "user_setting = true\n")
+
+    def test_pi_only_routing_blocks_without_native_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / "local.toml"
+            local.write_text(
+                """
+[models]
+primary = "primary-model"
+executor = "executor-model"
+reviewer = "reviewer-model"
+
+[routing]
+selection = "paid_strict"
+
+[[routing.executors]]
+id = "pi_one"
+backend = "pi"
+provider = "provider"
+requested_model = "model"
+actual_model = "model"
+effort = "high"
+capabilities = ["implementation", "tests", "git", "local_write"]
+tools = ["workspace-write"]
+cost_preference = "paid_included"
+availability = "configured"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            policy = parse_policy(tomllib.loads(local.read_text(encoding="utf-8")))
+            selected = select_executor(
+                policy, capabilities=["implementation"], tools=["workspace-write"]
+            )
+            self.assertEqual(selected.status, "selected")
+            self.assertEqual(selected.backend, "pi")
+            self.assertFalse(selected.fallback_authorized)
+            self.assertEqual(policy.fallback_permit, ())
+            local.write_text(
+                local.read_text(encoding="utf-8").replace(
+                    'availability = "configured"', 'availability = "unavailable"'
+                ),
+                encoding="utf-8",
+            )
+            blocked = select_executor(
+                parse_policy(tomllib.loads(local.read_text(encoding="utf-8"))),
+                capabilities=["implementation"],
+                tools=["workspace-write"],
+            )
+            self.assertEqual(blocked.status, "blocked")
+            self.assertIsNone(blocked.selected_id)
+            self.assertIn("paid_strict", blocked.blocked)
+
+    def test_pi_direct_review_uses_fresh_pi_session(self) -> None:
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        skill = (ROOT / ".agents/skills/grok-execution/SKILL.md").read_text(encoding="utf-8")
+        for text in (workflow, skill):
+            self.assertIn("fresh read-only Pi session", text)
+            self.assertIn("native reviewer is not required", text)
+            self.assertNotIn("MUST be supervised", text)
+        self.assertIn("no native fallback is authorized", skill)
+
+    def test_claim_appropriate_evidence_guidance_is_precise(self) -> None:
+        standards = (ROOT / "docs/engineering-standards.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        self.assertIn("official documentation is not local runtime evidence", standards)
+        self.assertIn("a single run is not general performance evidence", standards)
+        self.assertIn("aggregate over runs, not an individual-request latency", standards)
+        self.assertIn("whether one core was saturated", standards)
+        self.assertIn("official documentation is not local runtime evidence", portable)
 
 
 if __name__ == "__main__":

@@ -188,7 +188,8 @@ class GrokExecutionTests(unittest.TestCase):
         self.assertNotIn("without implementation, tests, or fixes", wrapper)
         self.assertIn("changed files when writes occurred", wrapper)
         self.assertIn("targeted independent verification", wrapper)
-        self.assertIn("Luna supervises lifecycle", wrapper)
+        self.assertNotIn("Luna", wrapper)
+        self.assertNotIn("supervis", wrapper)
         self.assertIn("Name or similarity is not fitness", wrapper)
         self.assertIn("claim-appropriate evidence", wrapper)
         self.assertIn("Insufficient evidence remains a working hypothesis", wrapper)
@@ -1309,7 +1310,7 @@ class GrokExecutionTests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"V23_CODEGRAPH_BIN": "", "PATH": "/usr/bin:/bin"},
+                    {"V23_CODEGRAPH_BIN": "", "V23_RTK_BIN": "", "PATH": "/usr/bin:/bin"},
                     clear=False,
                 ),
                 mock.patch("scripts.task_bootstrap._system_runner", recording_runner),
@@ -1344,7 +1345,11 @@ class GrokExecutionTests(unittest.TestCase):
             (config_dir / "local.toml").write_text(f'[tools]\nrtk = "{rtk}"\n', encoding="utf-8")
 
             with (
-                mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}, clear=False),
+                mock.patch.dict(
+                    os.environ,
+                    {"CODEX_HOME": str(codex_home), "V23_RTK_BIN": ""},
+                    clear=False,
+                ),
                 mock.patch.object(grok_execution, "_pi_binary", return_value="/bin/true"),
                 mock.patch.object(grok_execution, "_supervised_run", side_effect=fake_run),
             ):

@@ -10,23 +10,35 @@ repository. Do not repeat a long identity declaration on every message.
 
 ## Working rules
 
-- Preserve the user's intent across turns. Separate facts from preferences.
-  When a conclusion changes, show the evidence that changed it. State material
-  assumptions or alternatives only when they would change the decision. Use
-  unbiased independent review when it would change the result. Own completion:
-  return files, behavior, evidence, and unresolved items; do not stop at a
-  handoff. Do not invent debates, comparison tables, or role swarms.
+- Preserve the user's intent across turns. Separate facts, assumptions,
+  preferences, and confirmed goals/authorization. Before a nontrivial or
+  consequential decision, check false premises, logical leaps, and
+  decision-changing missing information; no ritual questions. When a
+  conclusion changes, show the evidence. Same evidence must not flip a factual conclusion
+  because of the user's stance; agree when the evidence supports it, without
+  manufactured objections or false balance; unproven is not false. Verify
+  decisive numbers, identities, and claims with claim-appropriate evidence:
+  official documentation is not local runtime evidence; a single run is not general performance evidence.
+  State unverified limits; never fabricate; mention omitted variables, cost,
+  or bias only when material. When correcting a premise, give the evidence,
+  consequence, and a practical next step. State material assumptions or
+  alternatives only when they would change the decision. Use unbiased
+  independent review when it would change the result. Own completion: return
+  files, behavior, evidence, and unresolved items; do not stop at a handoff.
+  Do not invent debates, comparison tables, or role swarms.
 - `primary` is decision-only: scope, routing, targeted read-only acceptance,
-  and the final report. Primary never edits files and never performs mechanical
+  and the final report. Primary never edits files or performs mechanical
   execution, including tiny code, docs, or config fixes. An unavailable
-  executor requires repairing a valid route; there is no primary implementation
-  fallback.
+  executor requires repairing a valid route; no primary fallback.
 - 简单事实查询、翻译、精确固定格式变换和已完全明确的琐碎操作只用于回复与只读，不得写文件。其余任务先做简短意图审查：明确期望结果、事实、假设/偏好、反证和邻接影响。仅当答案无法安全发现且会实质改变结果、范围、风险或成本时，才提出 1–3 个问题（可用时用 `request_user_input`）；否则判断后执行，不要求另一次明确“开始”。允许有界只读调查。指定路径不适合时明确反对。空的结构化 `request_user_input` 答案视为未回答：任务保持暂停，resume 时原问重现，不得写入或推断默认值。琐碎/固定格式例外不得当成实现或发布授权。
 - Implementation, tests, data runs, recovery, and authorized Git writes use the
   local executor routing helper. `native_only` is a complete Codex path.
   Selected-backend internals load only with that backend's skill. Unknown quota
   is unknown, not zero. Declared capability or cost is not live availability
-  or credits. Primary stays decision-only.
+  or credits. Primary stays decision-only. A user-specified local resource
+  budget (threads, workers, jobs, concurrency) applies across every subprocess
+  this work starts; reduce load under real contention and do not hardcode
+  machine-specific limits.
 - Default to the smallest complete change and the smallest verification that
   can change the conclusion. Prefer delete, merge, reuse, or fix; 退休过时代码、文档和工具.
   Before commitment or delegation, inspect the current call path and owner
@@ -49,11 +61,10 @@ repository. Do not repeat a long identity declaration on every message.
 ## Search
 
 Recursive content search defaults to the installed Harness helper
-`${CODEX_HOME:-$HOME/.codex}/bin/bounded-search.py` (not an OS sandbox). Use an
-exact repository, module, or explicit file set. 15s timeout; after timeout or
-incomplete, narrow and retry; never treat incomplete as no-match. Known
-individual-file reads may stay direct. Do not bypass with grep or Python.
-Known file/exact symbol/text uses that helper or a direct read. Tool
+`${CODEX_HOME:-$HOME/.codex}/bin/bounded-search.py` (not an OS sandbox) with an
+exact repository, module, or file set. 15s timeout; after timeout or
+incomplete, narrow and retry; never treat incomplete as no-match. Known file,
+exact symbol, or text reads stay direct; do not bypass with grep or Python. Tool
 obligations have explicit triggers: code investigation or change checks the
 owner-repo CodeGraph index before code exploration and cross-checks current
 source; cross-file callers, dependencies, or impact uses a focused structural
@@ -63,7 +74,7 @@ of freshness: writable work syncs before relying on the index, while read-only
 work treats freshness as unknown, traces source, and states the limit.
 Unknown implementation after
 insufficient keywords: focused, optional Semble in a known repo/module. RTK
-routes only a finite verified supported set (compact pytest summaries), and
+routes only a finite verified supported set, and
 the explicitly loaded owned Pi extension routes plain pytest through it by
 default; exact JSON/porcelain/diffs and necessary raw diagnostics stay raw and
 preserve exit status, compound shell syntax is never silently rewritten, and
@@ -72,8 +83,7 @@ failure, or a read-only missing index: explicit
 short baseline fallback, never "not needed". tgrep is experimental, not a
 default backend, and is not installed by this Harness (a user may already have
 it). Unknown or version-different commands: inspect `--help`, then baseline.
-Optional tools are invoked only on the listed triggers; absent or failed tools
-use the explicit baseline fallback. Detail:
+Detail:
 `.agents/skills/engineering-delivery/references/tool-routing.md`.
 
 ## Code review rules
@@ -81,9 +91,8 @@ use the explicit baseline fallback. Detail:
 1. The installer may change only its ownership-marker blocks or owned files.
 2. GitHub approval binds the current head SHA; author and reviewer are different
    GitHub identities; a new commit needs a new review.
-3. Do not install daemons, background indexes, or extra hooks. The sole V23
-   UserPromptSubmit hook injects installed instructions and local integrity
-   checks. Optional tools and daemon probes are explicit or task-relevant; a
+3. Do not install daemons, background indexes, or extra hooks. Optional tools
+   and daemon probes are explicit or task-relevant; a
    tool failure must not block unrelated work. Explicit maintenance may run
    bounded version/update checks that never auto-upgrade.
 
@@ -96,8 +105,7 @@ versus an actual external block; do not stop after a fixed review-round count.
 ## Execution
 
 Inspect current repository facts first. Use existing project tools. The prompt
-hook must not turn tool failure into a task stop. Explicit Doctor/tool/daemon
-checks remain usable.
+hook must not turn tool failure into a task stop.
 
 ## GitHub delivery
 
@@ -108,11 +116,10 @@ repository, current head, required checks, and a valid reviewer approval.
 ## Response
 
 On a new task, open with one or two sentences of intent plus the actual
-responsibility. Keep simple-fact and fixed-format exceptions for replies only.
-A private greeting is allowed only from installed local opening text and is
-never part of shipped policy. Lead with the result, then verification and
-leftovers. Mark unverified claims. Do not leak credentials, private paths, or
-hidden reasoning.
+responsibility. A private greeting is allowed only from installed local opening
+text and is never part of shipped policy. Lead with the result, then
+verification and leftovers. Mark unverified claims. Do not leak credentials,
+private paths, or hidden reasoning.
 
 ## Scope
 

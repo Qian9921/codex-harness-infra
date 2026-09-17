@@ -219,6 +219,37 @@ class RepositoryContractTests(unittest.TestCase):
         for text in (agents, workflow, skill, portable):
             self.assertIn("retire" if text in (workflow, skill) else "退休", text)
 
+    def test_portable_judgment_and_pi_direct_contract(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        portable = (ROOT / "package/global-portable.md").read_text(encoding="utf-8")
+        workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
+        skill = (ROOT / ".agents/skills/engineering-delivery/SKILL.md").read_text(encoding="utf-8")
+        pi_skill = (ROOT / ".agents/skills/grok-execution/SKILL.md").read_text(encoding="utf-8")
+        standards = (ROOT / "docs/engineering-standards.md").read_text(encoding="utf-8")
+        example = (ROOT / "package/local.example.toml").read_text(encoding="utf-8")
+        for text in (agents, portable, workflow, skill, pi_skill):
+            self.assertIn("false premises", text)
+            self.assertIn("decision-changing missing information", text)
+            self.assertIn("must not flip a factual conclusion", text)
+            self.assertIn("unproven is not false", text)
+            self.assertIn("official documentation is not local runtime evidence", text)
+            self.assertIn("a single run is not general performance evidence", text)
+        self.assertIn("aggregate over runs, not an individual-request latency", standards)
+        self.assertIn("whether one core was saturated", standards)
+        self.assertIn("when correcting a premise", standards)
+        self.assertIn("user-specified local resource budget", workflow)
+        self.assertIn("real contention", workflow)
+        self.assertIn("用户指定本机资源预算", portable)
+        self.assertIn("真实争用", portable)
+        self.assertIn("paid_strict", example)
+        self.assertIn("[routing.fallback].permit", example)
+        for text in (workflow, pi_skill):
+            self.assertIn("fresh read-only Pi session", text)
+            self.assertIn("native reviewer is not required", text)
+        for text in (workflow, pi_skill, portable):
+            self.assertNotIn("Luna", text)
+            self.assertNotIn("MUST be supervised", text)
+
     def test_empty_structured_answers_pause_without_mutation_and_re_present(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
@@ -239,20 +270,14 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertIn(
             "Empty structured `request_user_input` answers stay unanswered and paused", architecture
         )
-        self.assertIn("separately spawned generic Luna-low native subagent", skill)
-        self.assertNotIn("separately spawned generic Luna-low native subagent", workflow)
-        self.assertNotIn("separately spawned generic Luna-low native subagent", agents)
-        self.assertNotIn("separately spawned generic Luna-low native subagent", portable)
-        self.assertIn("MUST be supervised", skill)
-        self.assertNotIn("MUST be supervised", workflow)
-        self.assertNotIn("MUST be supervised", architecture)
+        for text in (skill, workflow, agents, portable, architecture):
+            self.assertNotIn("Luna", text)
+            self.assertNotIn("MUST be supervised", text)
+            self.assertNotIn("may supervise", text)
+        self.assertIn("Direct Pi `run`/`resume` is a complete route", skill)
         self.assertIn("supervisor completion event", skill)
-        self.assertIn("does not directly narrate or poll the adapter", skill)
-        self.assertNotIn("may supervise", skill)
-        self.assertNotIn("may supervise", workflow)
-        self.assertNotIn("may supervise", architecture)
-        self.assertNotIn("may supervise", agents)
-        self.assertNotIn("may supervise", portable)
+        self.assertIn("narrating or polling the adapter", skill)
+        self.assertIn("no native fallback is authorized", skill)
         self.assertIn("quota-exhaustion-only fallback", skill)
         self.assertNotIn("quota-exhaustion-only fallback", workflow)
         self.assertIn("decision-only", workflow)

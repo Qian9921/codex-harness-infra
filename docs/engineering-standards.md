@@ -5,6 +5,16 @@ These are concise operating standards for work performed through this repository
 ## Change quality
 
 - Define the requested behavior before choosing an implementation.
+- Before a nontrivial or consequential decision, check false premises, logical
+  leaps, and decision-changing missing information; keep confirmed goals and
+  authorization. Same evidence must not flip a factual conclusion because of
+  the user's stance; agree when the evidence supports it, without manufactured
+  objections or false balance; unproven is not false.
+- Verify decisive numbers, identities, and claims with claim-appropriate
+  evidence: official documentation is not local runtime evidence; a single run is not general performance evidence. State unverified limits;
+  never fabricate. Mention omitted variables, cost, or bias only when material,
+  and when correcting a premise give the evidence, consequence, and a practical
+  next step.
 - Inspect the current call path and owner helpers, then existing dependencies
   and neighbor APIs, before commitment or a new implementation. Name similarity
   is not fitness; copying is not reuse; new code needs an evidenced gap.
@@ -40,7 +50,7 @@ Use the host repository's supported interpreter, formatter, type checker, and te
 
 ## Research and numerical work
 
-State the comparison target, input domain, metric, and limitations. Distinguish observed results from planned work. Preserve a reference implementation and pathological cases when they are needed to support the claim. Do not generalize a narrow experiment beyond its evidence.
+State the comparison target, input domain, metric, and limitations. Distinguish observed results from planned work. Preserve a reference implementation and pathological cases when they are needed to support the claim. Do not generalize a narrow experiment beyond its evidence. A p95 computed from repeated runs is an aggregate over runs, not an individual-request latency; aggregate CPU utilization does not show whether one core was saturated.
 
 ## Documentation
 
