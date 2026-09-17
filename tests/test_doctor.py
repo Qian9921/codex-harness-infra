@@ -64,7 +64,8 @@ rtk = "rtk"
             )
             checks = {check["name"]: check for check in report["checks"]}
             self.assertTrue(report["ok"])
-            self.assertEqual(report["active_global_instruction"], str(codex_home / "AGENTS.md"))
+            canonical_home = codex_home.resolve()
+            self.assertEqual(report["active_global_instruction"], str(canonical_home / "AGENTS.md"))
             self.assertTrue(checks["global_agents_canonical"]["ok"])
             self.assertTrue(checks["global_override_absent"]["ok"])
             self.assertTrue(checks["codex_config_syntax"]["ok"])
@@ -78,7 +79,7 @@ rtk = "rtk"
             self.assertTrue(checks["pi_enforcement_extension"]["ok"])
             self.assertTrue(checks["codegraph_routing_skill"]["ok"])
             detail = str(checks["grok_execution_route"]["detail"])
-            self.assertIn(str(codex_home / "bin/grok-execution.py"), detail)
+            self.assertIn(str(canonical_home / "bin/grok-execution.py"), detail)
             self.assertIn(str(ROOT / "scripts/grok_execution.py"), detail)
             self.assertTrue(checks["tool_codegraph"]["ok"])
             self.assertTrue(checks["tool_semble"]["ok"])
@@ -118,7 +119,7 @@ rtk = "rtk"
             self.assertFalse(blocked["ok"])
             self.assertFalse(blocked_checks["global_override_absent"]["ok"])
             self.assertEqual(
-                blocked["active_global_instruction"], str(codex_home / "AGENTS.override.md")
+                blocked["active_global_instruction"], str(canonical_home / "AGENTS.override.md")
             )
             self.assertTrue(blocked_checks["global_portable"]["ok"])
             self.assertTrue(blocked_checks["global_local"]["ok"])
@@ -138,7 +139,9 @@ rtk = "rtk"
             skipped_checks = {check["name"]: check for check in skipped["checks"]}
             self.assertTrue(skipped["ok"])
             self.assertTrue(skipped_checks["global_override_absent"]["ok"])
-            self.assertEqual(skipped["active_global_instruction"], str(codex_home / "AGENTS.md"))
+            self.assertEqual(
+                skipped["active_global_instruction"], str(canonical_home / "AGENTS.md")
+            )
 
             (codex_home / "AGENTS.override.md").unlink()
             recovered = doctor(

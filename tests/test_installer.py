@@ -156,7 +156,7 @@ instruction = "Local-only opening."
             )
             self.assertFalse((codex_home / "AGENTS.override.md").exists())
             manifest = json.loads((state_dir / "install.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["agents_path"], str(agents))
+            self.assertEqual(manifest["agents_path"], str(agents.resolve()))
 
             uninstall(codex_home, state_dir)
             self.assertEqual(agents.read_text(encoding="utf-8"), "Personal rule.\n")

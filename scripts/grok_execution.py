@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+try:
+    from scripts.runtime import ensure_supported_python
+except ModuleNotFoundError:  # Support the documented direct script entrypoint.
+    from runtime import ensure_supported_python
+
+ensure_supported_python(__file__)
+
 import argparse
 import concurrent.futures
 import json

@@ -488,6 +488,12 @@ class GrokExecutionTests(unittest.TestCase):
             pathlib.Path(grok_execution.__file__).read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        # The real flat install ships runtime.py beside the launcher; mirror that
+        # so the copied module resolves the same direct-entry Python bridge.
+        runtime_source = pathlib.Path(grok_execution.__file__).resolve().parent / "runtime.py"
+        (work / "runtime.py").write_text(
+            runtime_source.read_text(encoding="utf-8"), encoding="utf-8"
+        )
         spec = importlib.util.spec_from_file_location("installed_grok_execution", installed)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
@@ -2184,7 +2190,32 @@ class GrokExecutionTests(unittest.TestCase):
             msg=stdout,
         )
 
-    def test_child_exec_restores_sigpipe_and_sigxfsz_to_dfl(self) -> None:
+    def test_child_exec_resets_ignored_pipe_to_dfl(self) -> None:
+        # A non-interactive POSIX shell preserves an inherited SIG_IGN and dies
+        # from ``kill -PIPE`` only when the launcher reset SIGPIPE to SIG_DFL
+        # before exec. Python's own startup re-ignores SIGPIPE, so this observes
+        # the real reset on every POSIX platform instead of Linux /proc bits.
+        shell = shutil.which("sh")
+        self.assertIsNotNone(shell)
+        assert shell is not None
+        previous = signal.getsignal(signal.SIGPIPE)
+        try:
+            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+            proc = grok_execution._spawn_grok(
+                [shell, "-c", "kill -PIPE $$; echo survived-pipe"], pathlib.Path(".")
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            finally:
+                grok_execution._stop_group_and_reap(proc)
+        finally:
+            signal.signal(signal.SIGPIPE, previous)
+        self.assertEqual(proc.returncode, -signal.SIGPIPE, msg=stderr)
+        self.assertNotIn("survived-pipe", stdout)
+
+    def test_child_exec_sigign_dispositions_on_linux(self) -> None:
+        if not pathlib.Path("/proc").is_dir():
+            self.skipTest("Linux /proc signal-disposition observation is unavailable")
         names = [
             name for name in ("SIGPIPE", "SIGXFSZ") if isinstance(getattr(signal, name, None), int)
         ]
@@ -2232,6 +2263,62 @@ class GrokExecutionTests(unittest.TestCase):
                 return fields
             time.sleep(0.01)
         self.fail(f"did not observe exec of {comm}: {last}")
+
+    def test_direct_source_entry_supports_help(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, str(grok_execution._module_path()), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            cwd=pathlib.Path(__file__).resolve().parents[1],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage:", completed.stdout.casefold())
+
+    def test_old_python_dispatch_reexecs_supported_interpreter(self) -> None:
+        candidates = [
+            os.environ.get("V23_TEST_OLD_PYTHON", ""),
+            "/usr/bin/python3",
+            "python3.10",
+            "python3.9",
+            "python3.8",
+            "python3.7",
+        ]
+        old_python: str | None = None
+        for candidate in candidates:
+            executable = candidate if os.path.isabs(candidate) else shutil.which(candidate)
+            if not executable:
+                continue
+            probe = subprocess.run(
+                [executable, "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if probe.returncode != 0:
+                continue
+            try:
+                major, minor = (int(part) for part in probe.stdout.split())
+            except ValueError:
+                continue
+            if (major, minor) < (3, 11):
+                old_python = executable
+                break
+        if old_python is None:
+            self.skipTest("no pre-3.11 interpreter available for the dispatch regression")
+        env = os.environ.copy()
+        env["CODEX_HARNESS_PYTHON"] = sys.executable
+        completed = subprocess.run(
+            [old_python, str(grok_execution._module_path()), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            cwd=pathlib.Path(__file__).resolve().parents[1],
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage:", completed.stdout.casefold())
+        self.assertNotIn("ModuleNotFoundError", completed.stderr)
 
     def test_child_reset_uses_getattr_for_optional_restore_signals(self) -> None:
         seen: list[int] = []
