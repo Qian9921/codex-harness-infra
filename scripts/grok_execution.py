@@ -461,8 +461,7 @@ _AUTHORIZED_WORK = (
     "Preserve unrelated changes. Do not commit unless explicitly authorized. "
     "Return a concise result covering changed files when writes occurred, "
     "behavior, evidence, and unresolved items. The parent will run targeted "
-    "independent verification instead of duplicating the work. Luna supervises "
-    "lifecycle and receipt only.\n"
+    "independent verification instead of duplicating the work.\n"
 )
 
 

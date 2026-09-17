@@ -16,13 +16,14 @@ skill; this file holds the internals so they are not repeated in every prompt.
 - Cleanup ownership is taken immediately after spawn.
 - Public registry and signal cleanup require a validated dedicated PGID
   (`getpgid == pid`).
-- All Codex Pi `run`/`resume` invocations are supervised by a separately
-  spawned generic Luna-low native subagent that watches lifecycle and receipt
-  only and never edits. The parent waits for the supervisor completion event
-  and does not narrate or poll the adapter.
-- `v23_executor` is the quota-exhaustion-only fallback and is not the
-  supervisor. Timeout, authentication, network, bridge, model-identity, or
-  receipt errors do not authorize fallback.
+- Direct Pi `run`/`resume` is a complete route. A separate supervisor is
+  optional local configuration that watches lifecycle and receipt only and
+  never edits; the parent waits for its completion event and does not narrate
+  or poll the adapter.
+- `v23_executor` is the quota-exhaustion-only fallback only where the local
+  routing config permits quota fallback; it is not a supervisor. Timeout,
+  authentication, network, bridge, model-identity, or receipt errors do not
+  authorize fallback.
 
 ## Spawn and cleanup token
 

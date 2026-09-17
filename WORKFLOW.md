@@ -1,6 +1,6 @@
 # Delivery workflow
 
-This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Selected-backend internals (including Pi/Grok identity, supervision, effort, PGID, and quota labels) load only from that backend's skill.
+This file defines how the portable roles cooperate with Codex and GitHub. It is a small operating agreement, not a second agent runtime. Selected-backend internals (including Pi/Grok identity, effort, PGID, quota labels, and any configured supervision) load only from that backend's skill.
 
 ## Work kind and capability
 
@@ -17,7 +17,7 @@ Capability follows the installed `[delivery]` table, not an implied standing gra
 
 ## Participatory questioning
 
-This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly as replies or read-only work; they never write files. Those exceptions never authorize implementation or publication by themselves. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery. Preserve intent across turns; separate facts from preferences; show evidence when a conclusion changes; state material assumptions only when they would change the decision.
+This contract applies to both `discuss` and `repo_change`. Simple factual queries, translations, exact fixed-format transformations, and fully explicit trivial operations may proceed directly as replies or read-only work; they never write files. Those exceptions never authorize implementation or publication by themselves. For every other task, perform a concise intent audit: desired outcome, facts, assumptions/preferences, counterevidence, and adjacent effects; bounded read-only investigation is allowed. Check false premises, logical leaps, and decision-changing missing information, and keep confirmed goals and authorization. Same evidence must not flip a factual conclusion because of the user's stance; agree when the evidence supports it, without manufactured objections or false balance; unproven is not false. Decide whether to ask or act. Ask 1–3 questions (`request_user_input` when available) only when the answer cannot be safely discovered and materially changes outcome, scope, risk, or cost; otherwise proceed without a separate explicit start. Disagree explicitly and propose a better route when the requested method does not serve the outcome. Preserve safety and authorization boundaries, machine-readable/fixed-format precedence, and immediate bounded containment for urgent safety or recovery. Preserve intent across turns; separate facts from preferences; show evidence when a conclusion changes; state material assumptions only when they would change the decision. Verify decisive numbers, identities, and claims with claim-appropriate evidence: official documentation is not local runtime evidence, and a single run is not general performance evidence; state unverified limits and never fabricate.
 
 ## DISCUSS
 
@@ -51,9 +51,13 @@ Primary then runs targeted independent read-only verification of those claims
 instead of duplicating the full implementation. If no valid executor route is
 available, repair routing; do not fall back to primary implementation.
 `native_only` is a complete Codex executor path. When routing selects another
-backend, load that backend's skill for identity, supervision, and receipts.
+backend, load that backend's skill for identity, receipts, and any configured
+supervision.
 The reviewer receives the request, current diff, relevant evidence, and current
-head SHA in fresh read-only context.
+head SHA in fresh read-only context. When the selected route is Pi-only (for
+example `paid_strict` with only Pi executors and an empty
+`[routing.fallback].permit`), a fresh read-only Pi session can perform that
+review; a native reviewer is not required.
 
 Executor selection is local and capability-based. Run
 `python scripts/executor_routing.py select --local-config <file> --capability implementation`
@@ -62,7 +66,9 @@ zero, do not migrate just because a new native slug exists, and do not label
 network/auth/timeout/bridge errors as quota. Model names are frozen at install,
 update, or actual use of the local mapping; do not auto-upgrade shared policy
 to a new native version string. Shared instructions use the logical `primary`
-role name, not a native model slug.
+role name, not a native model slug. A Pi-only configuration is `paid_strict`
+with only Pi executors and an empty `[routing.fallback].permit`; an unsuitable
+or unavailable candidate is blocked, not replaced by a native executor.
 
 The author and reviewer are different GitHub identities. The author must be the GitHub actor that pushes the branch; on a shared machine, explicitly select the author's isolated Git credential helper instead of inheriting the default credential. The reviewer model's verdict, the GitHub approval, and GitHub's branch rules are separate facts. A review is valid only for the head SHA it inspected. Any later commit requires a new review.
 
@@ -97,7 +103,7 @@ Production releases, deletion of user data, credential changes, account operatio
 
 ## Delegation
 
-Use subagents for independent read-heavy investigation, testing, or review when that reduces context noise. Use one writer per worktree. Do not parallelize tightly coupled edits merely for appearance. A delegated task is complete only when it returns a concrete result, evidence, diff, or blocker.
+Use subagents for independent read-heavy investigation, testing, or review when that reduces context noise. Use one writer per worktree. Do not parallelize tightly coupled edits merely for appearance. A delegated task is complete only when it returns a concrete result, evidence, diff, or blocker. A user-specified local resource budget (threads, workers, jobs, or concurrency) applies across every subprocess and delegated task this work starts; reduce load under real contention rather than hardcoding machine-specific limits.
 
 ## Interruption and recovery
 

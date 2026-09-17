@@ -22,8 +22,8 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 可移植角色为 `primary`、`executor` 和 `reviewer`：
 
 - `primary` 只做决策与只读验收，永不改文件，也不做机械执行。执行器不可用时修复路由，禁止把实现交回 primary。
-- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径。后端身份与 receipt 只从选中 backend 的 skill 加载。
-- `reviewer` 使用新上下文，以只读方式审查当前变更。
+- 由本地 executor routing 选中的执行器负责有界实现与相关验证。`native_only` 是完整的 Codex 路径。后端身份、receipt 与可选 supervision 只从选中 backend 的 skill 加载。
+- `reviewer` 使用新上下文，以只读方式审查当前变更。Pi-only 路由可用全新的只读 Pi session 完成审查，不要求 native reviewer。
 
 本机安装会把 primary、executor 和 reviewer 映射到该机器可用的模型和工具。Native 模型 slug、账号映射、凭据、开场指令和绝对路径仍属于本机配置。共享策略使用逻辑 executor ID 与 backend，不写入当前 native 版本号。
 
@@ -33,7 +33,7 @@ Codex 原生提供 Agent Loop、权限、Skill 和 Subagent 能力。本仓库�
 
 - `native_only`：只需 Codex，不要求 Pi 可执行文件或配额 receipt。
 - `paid_preferred`：优先匹配的 paid/included executor；仅在 `[routing.fallback]` 允许的原因（如 `quota_exhausted`）下 fallback。
-- `paid_strict`：同样优先；付费候选不合适时阻断，除非有明确允许的 fallback 原因。
+- `paid_strict`：同样优先；付费候选不合适时阻断，除非有明确允许的 fallback 原因。仅配置 Pi executor 且 `[routing.fallback].permit` 为空时即为 Pi-only：候选不可用会被阻断，不会替换为 native executor。
 - 省略 `[routing]`：兼容既有 Grok 优先、实际模型 receipt、仅配额 native fallback。
 
 支持的适配器是 native Codex 与通用 Pi adapter（`backend = grok` 或 `backend = pi`）。cost_preference 是用户声明，不是已核验余额。未知配额保持 unknown。模型更新只改本机映射，不因新 native slug 自动迁移。禁止回退到 GrokCLI。

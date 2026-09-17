@@ -25,6 +25,8 @@ reviewer = ""
 # native_only: Codex executor is the complete normal path; Pi/Grok is not required.
 # paid_preferred: prefer a configured paid/included executor that matches the task.
 # paid_strict: same preference; fallback only on an explicit permitted cause.
+# Pi-only: paid_strict with only Pi executors and an empty [routing.fallback].permit;
+# an unavailable candidate is blocked, not replaced by a native executor.
 # Configs that omit [routing] keep legacy Grok-preferred, quota-only native fallback.
 # External dispatch is the generic Pi adapter. Do not invoke GrokCLI.
 selection = "native_only"
