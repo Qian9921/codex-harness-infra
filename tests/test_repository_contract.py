@@ -323,6 +323,12 @@ class RepositoryContractTests(unittest.TestCase):
         workflow = (ROOT / "WORKFLOW.md").read_text(encoding="utf-8")
         self.assertIn("stalled progress", workflow)
 
+    def test_direct_entry_bridge_precedes_tomllib_import(self) -> None:
+        text = (ROOT / "scripts/grok_execution.py").read_text(encoding="utf-8")
+        bridge = text.index("ensure_supported_python(__file__)")
+        self.assertLess(bridge, text.index("import tomllib"))
+        self.assertIn("from runtime import ensure_supported_python", text)
+
     def test_pi_enforcement_wiring_uses_the_official_extension_api(self) -> None:
         extension = (ROOT / "package/pi/v23-enforce-tools.ts").read_text(encoding="utf-8")
         bridge = (ROOT / "scripts/grok_execution.py").read_text(encoding="utf-8")

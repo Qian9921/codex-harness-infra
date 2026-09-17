@@ -25,6 +25,7 @@ from scripts.bounded_search import (
     _child_reset_inherited_signal_mask,
     _spawn_search,
     _SpawnCleanupToken,
+    _too_broad,
     main,
     run_search,
     terminate_group,
@@ -331,6 +332,58 @@ class BoundedSearchTests(unittest.TestCase):
             name for name in ("SIGPIPE", "SIGXFSZ") if isinstance(getattr(signal, name, None), int)
         ]
         self.assertIn("SIGPIPE", names)
+
+        # A non-interactive POSIX shell preserves an inherited SIG_IGN and dies
+        # from ``kill -PIPE`` only when the launcher reset SIGPIPE to SIG_DFL
+        # before exec. Python's own startup re-ignores SIGPIPE, so this observes
+        # the real reset on every POSIX platform instead of Linux /proc bits.
+        shell = shutil.which("sh")
+        self.assertIsNotNone(shell)
+        assert shell is not None
+        previous_pipe = signal.getsignal(signal.SIGPIPE)
+        try:
+            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+            proc = _spawn_search([shell, "-c", "kill -PIPE $$; echo survived-pipe"], Path("."))
+            try:
+                stdout, _stderr = proc.communicate(timeout=5)
+            finally:
+                terminate_group(proc)
+        finally:
+            signal.signal(signal.SIGPIPE, previous_pipe)
+        self.assertEqual(proc.returncode, -signal.SIGPIPE, msg=stdout)
+        self.assertNotIn("survived-pipe", stdout.decode("utf-8", "replace"))
+
+        seen: list[int] = []
+
+        class MissingXfsz:
+            SIGTERM = signal.SIGTERM
+            SIGHUP = signal.SIGHUP
+            SIGINT = signal.SIGINT
+            SIGPIPE = signal.SIGPIPE
+            SIG_DFL = signal.SIG_DFL
+            SIG_UNBLOCK = signal.SIG_UNBLOCK
+
+            @staticmethod
+            def signal(signum: int, handler: object) -> None:
+                seen.append(signum)
+
+            @staticmethod
+            def pthread_sigmask(how: int, mask: object) -> set[int]:
+                return set()
+
+        with mock.patch("scripts.bounded_search.signal", MissingXfsz):
+            _child_reset_inherited_signal_mask()
+        self.assertIn(signal.SIGPIPE, seen)
+        if hasattr(signal, "SIGXFSZ"):
+            self.assertNotIn(signal.SIGXFSZ, seen)
+
+    def test_child_exec_resets_ignored_signals_on_linux(self) -> None:
+        if not Path("/proc").is_dir():
+            self.skipTest("Linux /proc signal-disposition observation is unavailable")
+        names = [
+            name for name in ("SIGPIPE", "SIGXFSZ") if isinstance(getattr(signal, name, None), int)
+        ]
+        self.assertIn("SIGPIPE", names)
         sleep_bin = shutil.which("sleep")
         self.assertIsNotNone(sleep_bin)
         assert sleep_bin is not None
@@ -368,29 +421,20 @@ class BoundedSearchTests(unittest.TestCase):
             for name, handler in ignored_handlers.items():
                 signal.signal(getattr(signal, name), handler)
 
-        seen: list[int] = []
-
-        class MissingXfsz:
-            SIGTERM = signal.SIGTERM
-            SIGHUP = signal.SIGHUP
-            SIGINT = signal.SIGINT
-            SIGPIPE = signal.SIGPIPE
-            SIG_DFL = signal.SIG_DFL
-            SIG_UNBLOCK = signal.SIG_UNBLOCK
-
-            @staticmethod
-            def signal(signum: int, handler: object) -> None:
-                seen.append(signum)
-
-            @staticmethod
-            def pthread_sigmask(how: int, mask: object) -> set[int]:
-                return set()
-
-        with mock.patch("scripts.bounded_search.signal", MissingXfsz):
-            _child_reset_inherited_signal_mask()
-        self.assertIn(signal.SIGPIPE, seen)
-        if hasattr(signal, "SIGXFSZ"):
-            self.assertNotIn(signal.SIGXFSZ, seen)
+    def test_too_broad_root_is_canonicalized_across_symlinks(self) -> None:
+        self.assertTrue(_too_broad(Path("/tmp")))
+        self.assertTrue(_too_broad(Path("/tmp").resolve()))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            alias = root / "tmp-alias"
+            alias.symlink_to(Path("/tmp"), target_is_directory=True)
+            self.assertTrue(_too_broad(alias))
+            scoped = root / "scoped"
+            scoped.mkdir()
+            (scoped / "file.txt").write_text("needle\n", encoding="utf-8")
+            self.assertFalse(_too_broad(scoped))
+            with self.assertRaisesRegex(SearchError, "too broad"):
+                run_search(root=Path("/tmp"), pattern="needle", paths=[])
 
     def test_cli_match_and_too_broad_root(self) -> None:
         self.assertEqual(DEFAULT_TIMEOUT_SECONDS, 15)

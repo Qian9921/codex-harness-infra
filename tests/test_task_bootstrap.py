@@ -55,6 +55,17 @@ DAEMON_VERSION_JSON = json.dumps(
 )
 
 
+def _short_socket_home(prefix: str = "v23-sock-") -> tempfile.TemporaryDirectory[str]:
+    """Create a temp home short enough for AF_UNIX's sun_path limit on macOS.
+
+    ``tempfile.gettempdir()`` on macOS is a long ``/var/folders/...`` path that
+    resolves to an even longer ``/private/var/...`` path, so a fixture socket
+    under it exceeds the 104-byte limit before it can bind. ``/tmp`` keeps the
+    canonical path short on both macOS and Linux CI.
+    """
+    return tempfile.TemporaryDirectory(prefix=prefix, dir="/tmp")
+
+
 class FakeRunner:
     """Return deterministic tool output while recording every invocation."""
 
@@ -763,7 +774,7 @@ rtk = "{rtk}"
             )
 
     def test_socket_parsing_and_permissions(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _short_socket_home() as directory:
             home = Path(directory) / "codex"
             sock_path = canonical_control_socket(home)
             sock_path.parent.mkdir(parents=True)
@@ -833,7 +844,7 @@ rtk = "{rtk}"
             json.dumps(payload)
 
     def test_socket_rejects_backup_stale_and_regular_file(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _short_socket_home() as directory:
             home = Path(directory) / "codex"
             canonical = canonical_control_socket(home)
             canonical.parent.mkdir(parents=True)

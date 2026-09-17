@@ -321,12 +321,17 @@ class PiExtensionSmokeTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(
-            stub_calls,
-            [
-                ["pytest", "tests\\foo", "-q"],
-                ["pytest", "-k", "test\\w+"],
-                ["pytest", "C:\\path", "-q"],
-            ],
+            Counter(map(tuple, stub_calls)),
+            Counter(
+                map(
+                    tuple,
+                    [
+                        ["pytest", "tests\\foo", "-q"],
+                        ["pytest", "-k", "test\\w+"],
+                        ["pytest", "C:\\path", "-q"],
+                    ],
+                )
+            ),
             records,
         )
         self.assertEqual(raw_calls, [], records)

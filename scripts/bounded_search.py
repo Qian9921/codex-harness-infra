@@ -75,11 +75,22 @@ def _output_cap() -> int:
     return DEFAULT_OUTPUT_CAP_BYTES
 
 
+def _canonical(path: Path) -> Path:
+    """Resolve user syntax and symlinks once for scope decisions.
+
+    macOS resolves ``/tmp`` and ``/var/tmp`` to ``/private/...``. The blocked-root
+    comparison canonicalizes both sides, because comparing only the requested
+    name admits ``/tmp`` as a scannable root and turns a refusal into an
+    unbounded scan.
+    """
+    return path.expanduser().resolve()
+
+
 def _too_broad(root: Path) -> bool:
-    resolved = root.resolve()
-    blocked = {Path("/"), Path("/tmp"), Path("/var/tmp"), Path("/home"), Path("/Users")}
+    resolved = _canonical(root)
+    blocked = {_canonical(Path(value)) for value in ("/", "/tmp", "/var/tmp", "/home", "/Users")}
     try:
-        blocked.add(Path.home().resolve())
+        blocked.add(_canonical(Path.home()))
     except OSError:
         pass
     return resolved in blocked
@@ -89,7 +100,7 @@ def _scoped_paths(root: Path, values: Sequence[str]) -> list[str]:
     scoped: list[str] = []
     for value in values:
         raw = Path(value)
-        candidate = (root / raw).resolve() if not raw.is_absolute() else raw.resolve()
+        candidate = _canonical(root / raw)
         try:
             candidate.relative_to(root)
         except ValueError as exc:
@@ -333,7 +344,7 @@ def run_search(
         raise SearchError("pattern is required")
     if type(timeout_seconds) is not int or timeout_seconds <= 0:
         raise SearchError("timeout must be a positive integer")
-    root = root.expanduser().resolve()
+    root = _canonical(root)
     if not root.is_dir():
         raise SearchError(f"search root is not a directory: {root}")
     if _too_broad(root):

@@ -9,17 +9,41 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  platform-tests:
+    name: platform-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install ripgrep (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install ripgrep (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ripgrep
       - run: python -m pip install --disable-pip-version-check ruff
       - run: ruff check .
       - run: ruff format --check .
       - run: python -m unittest discover -s tests -v
       - run: python scripts/evaluate.py
       - run: python -m compileall -q scripts
+
+  test:
+    name: test
+    needs: platform-tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every platform test job to succeed
+        if: ${{ needs['platform-tests'].result != 'success' }}
+        run: |
+          echo "platform-tests result: ${{ needs['platform-tests'].result }}" >&2
+          exit 1
